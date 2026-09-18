@@ -42,10 +42,11 @@ jobs:
 
       - name: Toolchain versions
         run: |
-          acpp --version 2>&1 | head -3 || true
-          g++ --version | head -1
-          ldd --version | head -1
-          nproc
+          (acpp --version 2>&1 | head -3) || true
+          (g++ --version | head -1) || true
+          (ldd --version | head -1) || true
+          nproc || true
+          true
 
       - name: Reproduce (make test_sl, in-situ)
         run: |
