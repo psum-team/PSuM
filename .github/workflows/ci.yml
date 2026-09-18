@@ -73,6 +73,28 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+      - name: CPU-only local config
+        # Same rationale as the build-test job: pin a CPU-only config on the
+        # no_gpu image (config.mk defaults to USE_CUDA=1).
+        run: |
+          cat > config.mk.local <<'CFG'
+          # CI only (ghcr.io/psum-team/psum_env:no_gpu) — CPU-only, no CUDA toolkit.
+          USE_CUDA = 0
+          USE_CUDA_SPARSELU_GPU = 0
+          USE_CUDA_SCHURCOMPLEMENT_GPU = 0
+          USE_CUDA_MULTIGRID_GPU = 0
+          CFG
+      - name: Generate and persist environment
+        run: |
+          bash env_scan.sh
+          set -a
+          source env_load.sh
+          set +a
+          while read -r line; do
+            key="${line#export }"
+            key="${key%%=*}"
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done < <(grep -E '^export ' env_load.sh)
       - name: Build (creates the pypsum venv used by the interop targets)
         run: bash build.sh
       - name: Python install/import + interop tests
@@ -141,6 +163,19 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+      - name: Generate and persist environment
+        # env_load.sh puts the Eigen and toolchain include paths on the
+        # environment; the MPI tests compile against both.
+        run: |
+          bash env_scan.sh
+          set -a
+          source env_load.sh
+          set +a
+          while read -r line; do
+            key="${line#export }"
+            key="${key%%=*}"
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done < <(grep -E '^export ' env_load.sh)
       - name: Install MPI runtime
         run: |
           apt-get update
