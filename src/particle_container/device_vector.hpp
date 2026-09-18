@@ -103,13 +103,15 @@ namespace particle_container {
         }
 
         device_vector(const sycl::queue& q, const std::vector<T>& host_vec) : device_vector(q, std::max(host_vec.size(), (size_t)8192)) {
-            if constexpr (!std::is_same_v<T, bool>) {
-                q_.memcpy(data_, host_vec.data(), host_vec.size() * sizeof(T)).wait();
-            } else {
-                std::unique_ptr<bool[]> raw(new bool[host_vec.size()]);
-                for (size_t i = 0; i < host_vec.size(); ++i)
-                    raw[i] = host_vec[i];
-                q_.memcpy(data_, raw.get(), host_vec.size() * sizeof(bool)).wait();
+            if (!host_vec.empty()) {  // zero-size memcpy hangs/crashes some backends (e.g. the OpenMP host backend)
+                if constexpr (!std::is_same_v<T, bool>) {
+                    q_.memcpy(data_, host_vec.data(), host_vec.size() * sizeof(T)).wait();
+                } else {
+                    std::unique_ptr<bool[]> raw(new bool[host_vec.size()]);
+                    for (size_t i = 0; i < host_vec.size(); ++i)
+                        raw[i] = host_vec[i];
+                    q_.memcpy(data_, raw.get(), host_vec.size() * sizeof(bool)).wait();
+                }
             }
             set_size_(host_vec.size());
         }
