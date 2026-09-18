@@ -208,6 +208,7 @@ namespace particle_container {
 
         std::vector<T> to_host() const {
             if_overflow();
+            if (size() == 0) return {};  // zero-size memcpy hangs/crashes some backends (e.g. the OpenMP host backend)
             std::vector<T> result(size());
             if constexpr (!std::is_same_v<T, bool>) {
                 q_.memcpy(result.data(), data_, size() * sizeof(T)).wait();
