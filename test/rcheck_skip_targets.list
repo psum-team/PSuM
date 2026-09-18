@@ -20,9 +20,11 @@ field/multi_patch_grid/test_merge_on_duplicate
 particle_boundary/test_ray_tracing
 particle_boundary/test_udf
 particle_boundary/test_udf_ray_tracing
+particle_collision/test2
 particle_collision/test4
 particle_collision/test7
 particle_collision/test9
+particle_container/test_sl
 particle_container/test_pg_complex
 particle_container/test_pg_shuffle
 serialization/test7
