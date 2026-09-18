@@ -1,0 +1,156 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/psum-team/psum_env:no_gpu
+    defaults:
+      run:
+        # Container run steps default to sh (dash), which lacks source; use bash.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CPU-only local config
+        # No CUDA in this image (no_gpu: WITH_CUDA=OFF) while config.mk defaults
+        # USE_CUDA=1. Pin an explicit CPU-only config for reproducible clean-clone builds.
+        run: |
+          cat > config.mk.local <<'CFG'
+          # CI only (ghcr.io/psum-team/psum_env:no_gpu) — CPU-only, no CUDA toolkit.
+          USE_CUDA = 0
+          USE_CUDA_SPARSELU_GPU = 0
+          USE_CUDA_SCHURCOMPLEMENT_GPU = 0
+          USE_CUDA_MULTIGRID_GPU = 0
+          CFG
+
+      - name: Generate and persist environment
+        # env_scan.sh emits env_load.sh (export KEY=VALUE). Steps are separate
+        # processes, so persist the resolved values via $GITHUB_ENV.
+        run: |
+          bash env_scan.sh
+          set -a
+          source env_load.sh
+          set +a
+          while read -r line; do
+            key="${line#export }"
+            key="${key%%=*}"
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done < <(grep -E '^export ' env_load.sh)
+
+      - name: Build
+        run: bash build.sh
+
+      - name: Functional tests (fast tier enforced, <20s per target)
+        run: |
+          cd test
+          bash runCheck.sh
+        env:
+          TIMEOUT: 20
+          RUNCHECK_STRICT: 1
+          # Two-tier design, opt-in for CI only: local `bash runCheck.sh` runs
+          # every target by default. Here RUNCHECK_SKIP_FILE selects the slow
+          # tier (long or CI-unsuitable targets, see test/rcheck_skip_targets.list);
+          # everything else is the fast tier — a timeout here fails the job.
+          RUNCHECK_SKIP_FILE: rcheck_skip_targets.list
+
+  # Python/interop gate: pypsum binding build+import and the MAS round-trip
+  # script. runCheck classifies these targets as "delegated (Python gate)".
+  python-test:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/psum-team/psum_env:no_gpu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (creates the pypsum venv used by the interop targets)
+        run: bash build.sh
+      - name: Python install/import + interop tests
+        run: |
+          cd test/pypsum
+          make py_import py_interop py_test
+
+  # On-demand slow tier (workflow_dispatch only): full strict run over all
+  # targets, including the long-track ones skipped by the fast gate. Provide
+  # the resulting log as release-candidate evidence.
+  slow-tests:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/psum-team/psum_env:no_gpu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: CPU-only local config
+        run: |
+          cat > config.mk.local <<'CFG'
+          # CI only (ghcr.io/psum-team/psum_env:no_gpu) — CPU-only, no CUDA toolkit.
+          USE_CUDA = 0
+          USE_CUDA_SPARSELU_GPU = 0
+          USE_CUDA_SCHURCOMPLEMENT_GPU = 0
+          USE_CUDA_MULTIGRID_GPU = 0
+          CFG
+      - name: Generate and persist environment
+        run: |
+          bash env_scan.sh
+          set -a
+          source env_load.sh
+          set +a
+          while read -r line; do
+            key="${line#export }"
+            key="${key%%=*}"
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done < <(grep -E '^export ' env_load.sh)
+      - name: Build
+        run: bash build.sh
+      - name: Full strict run (no skip file)
+        run: |
+          cd test
+          bash runCheck.sh
+        env:
+          TIMEOUT: 600
+          RUNCHECK_STRICT: 1
+          RUNCHECK_KEEP_LOGS: slow_run_logs
+      - name: Upload full-run evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: slow-tier-full-run
+          path: test/slow_run_logs/
+          if-no-files-found: error
+
+  # Separate MPI multi-process gate: the CPU image has no MPI runtime, so install it.
+  # Kept apart from the single-process runCheck.sh gate (needs mpirun + N ranks).
+  mpi-test:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/psum-team/psum_env:no_gpu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MPI runtime
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev
+      - name: MPI multi-process tests (2/3/4 ranks)
+        env:
+          # The no_gpu image runs as root and OpenMPI refuses root by default;
+          # opt in explicitly here (isolated CI container only).
+          MPIRUN_ARGS: "--allow-run-as-root --oversubscribe"
+        run: |
+          # Headless: hwloc's gl component probes X11 and hangs; disable it.
+          export HWLOC_COMPONENTS=-gl
+          bash test/mpi/run_mpi_tests.sh

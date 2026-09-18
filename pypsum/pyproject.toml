@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pypsum"
+version = "0.9"
+description = "PSuM Python interop / serialization bindings (pre-built extension expected; build it with pypsum/serialization/build.sh first)"
+requires-python = ">=3.8"
+dependencies = ["numpy"]
+
+# NOTE: this package ships the extension module only after it has been built
+# in-tree with pypsum/serialization/build.sh. A plain `pip install .` from a
+# fresh clone has no extension binary and importing will fail. The supported
+# route is: build the extension first, then install (or add pypsum/ to sys.path
+# as described in pypsum/load_python_module*.md).
+
+[tool.setuptools]
+packages = ["pypsum"]
+
+[tool.setuptools.package-dir]
+pypsum = "."
+
+[tool.setuptools.package-data]
+pypsum = ["bin/*.so", "bin/*.pyd"]

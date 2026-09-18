@@ -1,0 +1,342 @@
+#ifndef PSUM_PARTICLE_CONTAINER_DEVICE_VECTOR_HPP
+#define PSUM_PARTICLE_CONTAINER_DEVICE_VECTOR_HPP
+
+#include <sycl/sycl.hpp>
+#include <stdexcept>
+#include <algorithm>
+#include "../serialization/container_sl.hpp"
+
+namespace psum {
+
+namespace particle_container {
+
+    template <typename Func, typename Data>
+    concept handler_to_device_func_const =
+        requires(Func f, sycl::handler &h, const Data &p) {
+            { f(h)(p) } -> std::same_as<void>;
+        };
+
+    template <typename Func, typename Data>
+    concept handler_to_device_func_mutable =
+        requires(Func f, sycl::handler &h, Data &p) {
+            { f(h)(p) } -> std::same_as<void>;
+        };
+
+    template <typename T>
+    class device_vector_acc {
+    public:
+        using value_type = T;
+
+        device_vector_acc(T* data, size_t* size, bool* overflow, size_t capacity)
+            : data_(data), size_(size), overflow_(overflow), capacity_(capacity) {}
+
+        inline size_t capacity() const {
+            return capacity_;
+        }
+
+        /**
+         * this function is not designed to be thread-safe for same index.
+         */
+        inline T& operator[](size_t idx) const {
+            return data_[idx];
+        }
+
+        /**
+         * thread-safe push_back.
+         */
+        inline size_t push_back(const T& value) const {
+            sycl::atomic_ref<size_t,
+                             sycl::memory_order::relaxed,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space> atomic_size(*size_);
+            size_t old_size = atomic_size.fetch_add(1);
+            if (old_size >= capacity_) {
+                // it will prevent the next 'get_access', and 'size' will not right any more.
+                sycl::atomic_ref<bool,
+                                 sycl::memory_order::relaxed,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space> atomic_overflow(*overflow_);
+                atomic_overflow.store(true);
+                return capacity_;
+            }
+            data_[old_size] = value;
+            return old_size;
+        }
+
+        T* data() const {
+            return data_;
+        }
+
+    private:
+        T* data_;
+        size_t* size_;
+        bool* overflow_;
+        size_t capacity_;
+    };
+
+    template <typename T>
+    class device_vector {
+    public:
+        using value_type = T;
+        using acc_type = device_vector_acc<T>;
+        using is_device_container_t = std::true_type;
+
+        device_vector(const sycl::queue& q, size_t capacity = 8192) : q_(q), capacity_(capacity) {
+            data_ = sycl::malloc_device<T>(capacity_, q_);
+            if (!data_)
+                throw std::bad_alloc();
+
+            size_ = sycl::malloc_device<size_t>(1, q_);
+            if (!size_) {
+                sycl::free(data_, q_);
+                throw std::bad_alloc();
+            }
+            set_size_(0);
+
+            overflow_ = sycl::malloc_shared<bool>(1, q_);
+            if (!overflow_) {
+                sycl::free(data_, q_);
+                sycl::free(size_, q_);
+                throw std::bad_alloc();
+            }
+            *overflow_ = false;
+        }
+
+        device_vector(const sycl::queue& q, const std::vector<T>& host_vec) : device_vector(q, std::max(host_vec.size(), (size_t)8192)) {
+            if constexpr (!std::is_same_v<T, bool>) {
+                q_.memcpy(data_, host_vec.data(), host_vec.size() * sizeof(T)).wait();
+            } else {
+                std::unique_ptr<bool[]> raw(new bool[host_vec.size()]);
+                for (size_t i = 0; i < host_vec.size(); ++i)
+                    raw[i] = host_vec[i];
+                q_.memcpy(data_, raw.get(), host_vec.size() * sizeof(bool)).wait();
+            }
+            set_size_(host_vec.size());
+        }
+
+        ~device_vector() {
+            if (data_) sycl::free(data_, q_);
+            if (size_) sycl::free(size_, q_);
+            if (overflow_) sycl::free(overflow_, q_);
+        }
+
+        device_vector(const device_vector&) = delete;
+        device_vector& operator=(const device_vector&) = delete;
+
+        device_vector(device_vector&& other) noexcept
+            : q_(other.q_), data_(other.data_), size_(other.size_), overflow_(other.overflow_), capacity_(other.capacity_) {
+            other.data_ = nullptr;
+            other.size_ = nullptr;
+            other.overflow_ = nullptr;
+            other.capacity_ = 0;
+        }
+        
+        device_vector& operator=(device_vector&& other) noexcept {
+            if (this != &other) {
+                if (data_) sycl::free(data_, q_);
+                if (size_) sycl::free(size_, q_);
+                if (overflow_) sycl::free(overflow_, q_);
+            
+                q_ = other.q_;
+                data_ = other.data_;
+                size_ = other.size_;
+                overflow_ = other.overflow_;
+                capacity_ = other.capacity_;
+            
+                other.data_ = nullptr;
+                other.size_ = nullptr;
+                other.overflow_ = nullptr;
+                other.capacity_ = 0;
+            }
+            return *this;
+        }
+
+        bool overflowed() const noexcept { return *overflow_; }
+
+        void if_overflow() const { if (*overflow_) throw std::overflow_error("Error: device_vector overflow."); }
+
+        size_t size() const {
+            if_overflow();
+            return get_size_();
+        }
+
+        size_t capacity() const { return capacity_; }
+
+        void clear() {
+            if_overflow();
+            set_size_(0);
+        }
+
+        T* data() const {
+            if_overflow();
+            return data_;
+        }
+
+        void resize(size_t new_size) {
+            if_overflow();
+            if (new_size > capacity_) {
+                reserve(std::max(new_size, capacity_ * 2));
+            }
+            set_size_(new_size);
+        }
+
+        void reserve(size_t new_capacity) {
+            if_overflow();
+            if (new_capacity <= capacity_) return;
+
+            T* new_data = sycl::malloc_device<T>(new_capacity, q_);
+            if (!new_data) throw std::bad_alloc();
+
+            size_t copy_size = get_size_();
+            if (copy_size > 0)
+                q_.memcpy(new_data, data_, copy_size * sizeof(T)).wait();
+
+            sycl::free(data_, q_);
+            data_ = new_data;
+            capacity_ = new_capacity;
+        }
+
+        // 'h' is just a placeholder to limit the scope of 'get_access'.
+        acc_type get_access(sycl::handler& h) const {
+            if_overflow();
+            return acc_type(data_, size_, overflow_, capacity_);
+        }
+
+        acc_type get_access_without_overflow_check(sycl::handler& h) const {
+            return acc_type(data_, size_, overflow_, capacity_);
+        }
+
+        std::vector<T> to_host() const {
+            if_overflow();
+            std::vector<T> result(size());
+            if constexpr (!std::is_same_v<T, bool>) {
+                q_.memcpy(result.data(), data_, size() * sizeof(T)).wait();
+            } else {
+                std::unique_ptr<bool[]> raw(new bool[size()]);
+                q_.memcpy(raw.get(), data_, size() * sizeof(bool)).wait();
+                result.assign(raw.get(), raw.get() + size());
+            }
+            return result;
+        }
+
+        sycl::queue get_queue() const { return q_; }
+
+        template <typename FuncType>
+        requires handler_to_device_func_const<FuncType, T>
+        void for_each(FuncType&& func) const {
+            size_t data_size = get_size_();
+            if (data_size == 0) return;  // zero-size launch => CU:1 on CUDA backend
+            q_.submit([&](sycl::handler& h) {
+                auto data_acc = get_access(h);
+                auto v_func = func(h);
+                if (data_size < 1024) {
+                    constexpr size_t wg = 128;
+                    h.parallel_for(sycl::nd_range<1>{sycl::range<1>((data_size + wg - 1) / wg * wg), sycl::range<1>(wg)}, [=](sycl::nd_item<1> item) {
+                        if (size_t idx = item.get_global_id(0); idx < data_size) v_func(data_acc[idx]);
+                    });
+                    return;
+                }
+                h.parallel_for(sycl::range<1>(data_size), [=](sycl::id<1> idx) {
+                    v_func(data_acc[idx]);
+                });
+            }).wait();
+        }
+
+        template <typename FuncType>
+        requires handler_to_device_func_mutable<FuncType, T>
+        void for_each(FuncType&& func) {
+            size_t data_size = get_size_();
+            if (data_size == 0) return;  // zero-size launch => CU:1 on CUDA backend
+            q_.submit([&](sycl::handler& h) {
+                auto data_acc = get_access(h);
+                auto v_func = func(h);
+                if (data_size < 1024) {
+                    constexpr size_t wg = 128;
+                    h.parallel_for(sycl::nd_range<1>{sycl::range<1>((data_size + wg - 1) / wg * wg), sycl::range<1>(wg)}, [=](sycl::nd_item<1> item) {
+                        if (size_t idx = item.get_global_id(0); idx < data_size) v_func(data_acc[idx]);
+                    });
+                    return;
+                }
+                h.parallel_for(sycl::range<1>(data_size), [=](sycl::id<1> idx) {
+                    v_func(data_acc[idx]);
+                });
+            }).wait();
+        }
+
+        void copy(const std::vector<T>& host_vec) {
+            *this = device_vector(q_, host_vec);
+        }
+
+    private:
+        mutable sycl::queue q_;
+        T* data_;
+        size_t* size_;
+        bool* overflow_;
+        size_t capacity_;
+        void set_size_(size_t new_size) const {
+            q_.copy(&new_size, size_, 1).wait();
+        }
+        size_t get_size_() const {
+            size_t result = 0;
+            q_.memcpy(&result, size_, sizeof(size_t)).wait();
+            return result;
+        }
+    };
+
+}
+
+namespace serialization {
+
+    template <typename T>
+    void save(mas_file& fp, const std::string& name, const psum::particle_container::device_vector<T>& obj) {
+        sycl::queue q = obj.get_queue();
+        std::string device_name = q.get_device().get_info<sycl::info::device::name>();
+        auto devices = q.get_device().get_platform().get_devices();
+        int same_name_device_count = 0;
+        for (auto& d : devices) {
+            if (d.get_info<sycl::info::device::name>() == device_name) {
+                same_name_device_count++;
+                if (d == q.get_device())
+                    break;
+            }
+        }
+        std::string device_name_with_count = "[#" + std::to_string(same_name_device_count - 1) + "]" + device_name;
+        save(fp, name + ".device", device_name_with_count);
+        save(fp, name + ".content", obj.to_host());
+    }
+
+    template <typename T>
+    void load(mas_file& fp, const std::string& name, psum::particle_container::device_vector<T>& obj) {
+        std::string device_name;
+        load(fp, name + ".device", device_name);
+        auto devices = sycl::platform(sycl::default_selector()).get_devices();
+        int device_count = 0;
+        std::string::size_type pos = device_name.find("[#");
+        if (pos != std::string::npos) {
+            std::string::size_type end_pos = device_name.find("]", pos);
+            if (end_pos != std::string::npos) {
+                std::string count_str = device_name.substr(pos + 2, end_pos - pos - 2);
+                device_count = std::stoi(count_str);
+                device_name = device_name.substr(end_pos + 1);
+            }
+        }
+        int same_name_device_count = 0;
+        for (auto& d : devices) {
+            if (d.get_info<sycl::info::device::name>() == device_name) {
+                same_name_device_count++;
+                if (device_count == 0 || same_name_device_count == device_count + 1) {
+                    std::vector<T> host_vec;
+                    load(fp, name + ".content", host_vec);
+                    obj = psum::particle_container::device_vector<T>(sycl::queue(d), host_vec);
+                    return;
+                }
+            }
+        }
+        // device not found.
+        throw std::runtime_error("Error: device not found.");
+    }
+}
+
+}
+
+#endif

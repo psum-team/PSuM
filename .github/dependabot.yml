@@ -1,0 +1,7 @@
+# 依赖更新提醒：GitHub Actions 自身版本
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"

@@ -1,0 +1,5 @@
+case*/
+*.plt
+main
+test_gamma_config
+output/

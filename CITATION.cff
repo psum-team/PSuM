@@ -1,0 +1,23 @@
+# This CITATION.cff file was generated with cffinit.
+cff-version: 1.2.0
+title: PSuM
+message: >-
+  If you use this software, please cite it using the
+  metadata provided above.
+type: software
+version: '0.9'
+date-released: '2026-09-18'
+authors:
+  - name: The PSuM Contributors
+identifiers:
+  - type: url
+    value: 'https://github.com/psum-team/PSuM'
+repository-code: 'https://github.com/psum-team/PSuM'
+license: MIT
+keywords:
+  - plasma
+  - particle-in-cell
+  - PIC
+  - SYCL
+  - GPU
+  - C++

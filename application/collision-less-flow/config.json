@@ -1,0 +1,29 @@
+{
+    "simulate_step" : 450000,
+    "print_step" : 50,
+    "collect_step" : 5,
+    "output_step" : 20000,
+    "save_step" : 50000,
+    "checkpoint" : 0,
+
+    "capacitance" : 5.0e-11,
+    "Te" : 30.0,
+    "Ti" : 3.0,
+    "reference" : 5.0e15,
+    "threshold_init" : -130.0,
+    "gamma": 10.0,
+    "ppc" : 40000.0,
+    "time_coef" : 1.0,
+    "grid_coef" : 1.0,
+
+    "start_pos" : 0.0,
+    "injection_pos" : 0.0,
+    "end_pos" : 0.4,
+    "r_length" : 0.15,
+    "r_inlet" : 0.05,
+
+    "field_type" : "coil",
+    "coil_B_max" : 0.1,
+    "coil_x_max" : 0.0,
+    "coil_L" : 0.1
+}

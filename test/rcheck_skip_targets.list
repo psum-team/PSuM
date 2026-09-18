@@ -1,0 +1,28 @@
+# Slow tier for CI (runCheck.sh reads this when RUNCHECK_SKIP_FILE is set).
+# Entries: <dir-relative-to-test>/<target>, one per line; '#' comments allowed.
+# Criterion: locally >~10s (CI enforces a strict 20s timeout and CI runners can
+# be slower) or structurally CI-unsuitable. Everything NOT listed here is the
+# fast tier: a timeout or failure there fails CI.
+field_solver/testpsolver2d
+field_solver/test_fem_poisson_2d
+field_solver/test_native_vs_mg_2d
+field_solver/test_device_mg_compare
+field_solver/testpsolver3d
+field_solver/testpsolver3d_multigrid
+field_solver/test_native_vs_mg_3d
+field_solver/test_hall_thruster
+field_solver/test_mpg_solver_compare
+field_solver/test_schur_state_save_load
+field_solver/test
+field/test_simpleinterp
+field/multi_patch_grid/test_density
+field/multi_patch_grid/test_merge_on_duplicate
+particle_boundary/test_ray_tracing
+particle_boundary/test_udf
+particle_boundary/test_udf_ray_tracing
+particle_collision/test4
+particle_collision/test7
+particle_collision/test9
+particle_container/test_pg_complex
+particle_container/test_pg_shuffle
+serialization/test7
