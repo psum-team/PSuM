@@ -18,7 +18,7 @@ jobs:
         # Container run steps default to sh (dash), which lacks source; use bash.
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: CPU-only local config
         # No CUDA in this image (no_gpu: WITH_CUDA=OFF) while config.mk defaults
@@ -72,7 +72,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: CPU-only local config
         # Same rationale as the build-test job: pin a CPU-only config on the
         # no_gpu image (config.mk defaults to USE_CUDA=1).
@@ -114,7 +114,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: CPU-only local config
         run: |
           cat > config.mk.local <<'CFG'
@@ -162,7 +162,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Generate and persist environment
         # env_load.sh puts the Eigen and toolchain include paths on the
         # environment; the MPI tests compile against both.
