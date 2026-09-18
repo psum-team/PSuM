@@ -49,6 +49,7 @@ jobs:
           true
 
       - name: Reproduce (make test_sl, in-situ)
+        continue-on-error: true
         run: |
           cd test/particle_container
           make test_sl; echo "exit=$?"
