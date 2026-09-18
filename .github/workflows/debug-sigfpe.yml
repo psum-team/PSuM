@@ -1,0 +1,76 @@
+name: debug-sigfpe
+on:
+  push:
+    branches: [debug/sigfpe-repro]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/psum-team/psum_env:no_gpu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CPU-only local config
+        run: |
+          cat > config.mk.local <<'CFG'
+          # CI only — CPU-only, no CUDA toolkit.
+          USE_CUDA = 0
+          USE_CUDA_SPARSELU_GPU = 0
+          USE_CUDA_SCHURCOMPLEMENT_GPU = 0
+          USE_CUDA_MULTIGRID_GPU = 0
+          CFG
+
+      - name: Generate and persist environment
+        run: |
+          bash env_scan.sh
+          set -a
+          source env_load.sh
+          set +a
+          while read -r line; do
+            key="${line#export }"
+            key="${key%%=*}"
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done < <(grep -E '^export ' env_load.sh)
+
+      - name: Toolchain versions
+        run: |
+          acpp --version 2>&1 | head -3 || true
+          g++ --version | head -1
+          ldd --version | head -1
+          nproc
+
+      - name: Reproduce (make test_sl, in-situ)
+        run: |
+          cd test/particle_container
+          make test_sl; echo "exit=$?"
+          rm -f test_sl
+
+      - name: Build with -g for gdb
+        run: |
+          cd test/particle_container
+          acpp -O3 -g -std=c++20 -fopenmp=libgomp -I ../../include -I ../../src \
+            -o test_sl_g test_sl.cpp 2>&1 | tail -3
+          ls -la test_sl_g
+
+      - name: Run under gdb (backtrace)
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends gdb >/dev/null 2>&1
+          cd test/particle_container
+          gdb -batch -ex "handle SIGFPE stop print" -ex run -ex "thread apply all bt" --args ./test_sl_g > gdb.log 2>&1 || true
+          tail -80 gdb.log
+
+      - name: Variant O0
+        run: |
+          cd test/particle_container
+          acpp -O0 -g -std=c++20 -fopenmp=libgomp -I ../../include -I ../../src \
+            -o test_sl_O0 test_sl.cpp 2>&1 | tail -2
+          ./test_sl_O0; echo "exit=$?"
+          rm -f test_sl_O0 test_sl_g tmp.mas gdb.log
