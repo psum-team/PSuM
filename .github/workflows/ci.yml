@@ -124,7 +124,7 @@ jobs:
           RUNCHECK_STRICT: 1
           RUNCHECK_KEEP_LOGS: slow_run_logs
       - name: Upload full-run evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: slow-tier-full-run
           path: test/slow_run_logs/
