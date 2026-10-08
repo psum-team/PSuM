@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <iostream>
+#include <algorithm>
 #include "foundation.hpp"
 #include "simple_interpolation.hpp"
 #include "field_interp.hpp"
@@ -309,25 +310,71 @@ namespace field {
 
     namespace simple_interpolation {
 
-        // linear interpolation
-        template<int Dim, typename VecDim> requires (foundation::array_like<VecDim, Dim>)
-        auto linear_interp(const simple_grid<Dim>& grid, const VecDim& p) {
-            auto cornerNode = grid.cN(p);
-            auto cornerPos = grid.nodePosition(cornerNode);
-            std::array<double, Dim> normalizatedPos;
+        // generate linear interpolation and higher-order interpolation
+        template<int SupportSize1D, int Dim, auto Func1D, typename VecDim>
+        requires (SupportSize1D > 1 &&
+                  foundation::array_like<VecDim, Dim> &&
+                  FuncWithSupportSize1D<Func1D, SupportSize1D>)
+        auto gen_interp(const simple_grid<Dim>& grid, const VecDim& p) {
+            constexpr bool NearestBase = (SupportSize1D % 2 == 1);
+            constexpr int Shift = NearestBase ? -(SupportSize1D / 2) : -(SupportSize1D / 2 - 1);
+            auto baseNode = NearestBase ? grid.nN(p) : grid.cN(p);
+            auto basePos = grid.nodePosition(baseNode);
+            std::array<double, Dim> normalizedPos;
             auto& delta_r = grid.get_deltas_r();
             for (int i = 0; i < Dim; i++)
-                normalizatedPos[i] = (p[i] - cornerPos[i]) * delta_r[i];
-            constexpr int SupportSize1D = 2;
-            auto coefs = simple_interpolation::interp_tensor<SupportSize1D, Dim, &simple_interpolation::linear_interp_1D>(normalizatedPos);
+                normalizedPos[i] = (p[i] - basePos[i]) * delta_r[i];
+            auto coefs = simple_interpolation::interp_tensor<SupportSize1D, Dim, Func1D>(normalizedPos);
             constexpr int SupportSize = coefs.size();
             std::array<size_t, SupportSize> indices;
             for (int i = 0; i < SupportSize; i++) {
-                auto node = cornerNode;
+                auto node = baseNode;
                 int idx = i;
                 for (int j = 0; j < Dim; j++) {
-                    int idx_in_dim = idx % SupportSize1D;
+                    int idx_in_dim = idx % SupportSize1D + Shift;
                     node.indices[Dim - 1 - j] += idx_in_dim;
+                    // high order stencils wrap periodically on boundary
+                    if constexpr (SupportSize1D > 2) {
+                        const int w = grid.get_cell_num()[Dim - 1 - j] + 1;
+                        if (node.indices[Dim - 1 - j] < 0) node.indices[Dim - 1 - j] += w;
+                        else if (node.indices[Dim - 1 - j] >= w) node.indices[Dim - 1 - j] -= w;
+                    }
+                    idx /= SupportSize1D;
+                }
+                indices[i] = grid.n2i(node);
+            }
+            return std::make_pair(indices, coefs);
+        }
+
+        // generate differential of linear interpolation and higher-order interpolation
+        template<int SupportSize1D, int Dim, auto Func1D, typename VecDim>
+        requires (SupportSize1D > 1 &&
+                  foundation::array_like<VecDim, Dim> &&
+                  FuncWithSupportSize1D<Func1D, SupportSize1D>)
+        auto gen_interp_diff(const simple_grid<Dim>& grid, const VecDim& p) {
+            constexpr bool NearestBase = (SupportSize1D % 2 == 1);
+            constexpr int Shift = NearestBase ? -(SupportSize1D / 2) : -(SupportSize1D / 2 - 1);
+            auto baseNode = NearestBase ? grid.nN(p) : grid.cN(p);
+            auto basePos = grid.nodePosition(baseNode);
+            std::array<double, Dim> normalizedPos;
+            auto& delta_r = grid.get_deltas_r();
+            for (int i = 0; i < Dim; i++)
+                normalizedPos[i] = (p[i] - basePos[i]) * delta_r[i];
+            auto coefs = simple_interpolation::interp_tensor_diff<SupportSize1D, Dim, Func1D>(normalizedPos, grid.get_deltas_r());
+            constexpr int SupportSize = coefs[0].size();
+            std::array<size_t, SupportSize> indices;
+            for (int i = 0; i < SupportSize; i++) {
+                auto node = baseNode;
+                int idx = i;
+                for (int j = 0; j < Dim; j++) {
+                    int idx_in_dim = idx % SupportSize1D + Shift;
+                    node.indices[Dim - 1 - j] += idx_in_dim;
+                    // high order stencils wrap periodically on boundary
+                    if constexpr (SupportSize1D > 2) {
+                        const int w = grid.get_cell_num()[Dim - 1 - j] + 1;
+                        if (node.indices[Dim - 1 - j] < 0) node.indices[Dim - 1 - j] += w;
+                        else if (node.indices[Dim - 1 - j] >= w) node.indices[Dim - 1 - j] -= w;
+                    }
                     idx /= SupportSize1D;
                 }
                 indices[i] = grid.n2i(node);
@@ -337,28 +384,38 @@ namespace field {
 
         // linear interpolation
         template<int Dim, typename VecDim> requires (foundation::array_like<VecDim, Dim>)
+        auto linear_interp(const simple_grid<Dim>& grid, const VecDim& p) {
+            return gen_interp<2, Dim, &linear_interp_1D>(grid, p);
+        }
+
+        // differential of the linear interpolation
+        template<int Dim, typename VecDim> requires (foundation::array_like<VecDim, Dim>)
         auto linear_interp_diff(const simple_grid<Dim>& grid, const VecDim& p) {
-            auto cornerNode = grid.cN(p);
-            auto cornerPos = grid.nodePosition(cornerNode);
-            std::array<double, Dim> normalizatedPos;
-            auto& delta_r = grid.get_deltas_r();
-            for (int i = 0; i < Dim; i++)
-                normalizatedPos[i] = (p[i] - cornerPos[i]) * delta_r[i];
-            constexpr int SupportSize1D = 2;
-            auto coefs = simple_interpolation::interp_tensor_diff<SupportSize1D, Dim, &simple_interpolation::linear_interp_1D>(normalizatedPos, grid.get_deltas_r());
-            constexpr int SupportSize = coefs[0].size();
-            std::array<size_t, SupportSize> indices;
-            for (int i = 0; i < SupportSize; i++) {
-                auto node = cornerNode;
-                int idx = i;
-                for (int j = 0; j < Dim; j++) {
-                    int idx_in_dim = idx % SupportSize1D;
-                    node.indices[Dim - 1 - j] += idx_in_dim;
-                    idx /= SupportSize1D;
-                }
-                indices[i] = grid.n2i(node);
-            }
-            return std::make_pair(indices, coefs);
+            return gen_interp_diff<2, Dim, &linear_interp_1D>(grid, p);
+        }
+
+        // quadratic B-spline interpolation
+        template<int Dim, typename VecDim> requires (foundation::array_like<VecDim, Dim>)
+        auto quadratic_interp(const simple_grid<Dim>& grid, const VecDim& p) {
+            return gen_interp<3, Dim, &quadratic_bspline_1D>(grid, p);
+        }
+
+        // differential of the quadratic B-spline interpolation
+        template<int Dim, typename VecDim> requires (foundation::array_like<VecDim, Dim>)
+        auto quadratic_interp_diff(const simple_grid<Dim>& grid, const VecDim& p) {
+            return gen_interp_diff<3, Dim, &quadratic_bspline_1D>(grid, p);
+        }
+
+        // cubic B-spline interpolation
+        template<int Dim, typename VecDim> requires (foundation::array_like<VecDim, Dim>)
+        auto cubic_interp(const simple_grid<Dim>& grid, const VecDim& p) {
+            return gen_interp<4, Dim, &cubic_bspline_1D>(grid, p);
+        }
+
+        // differential of the cubic B-spline interpolation
+        template<int Dim, typename VecDim> requires (foundation::array_like<VecDim, Dim>)
+        auto cubic_interp_diff(const simple_grid<Dim>& grid, const VecDim& p) {
+            return gen_interp_diff<4, Dim, &cubic_bspline_1D>(grid, p);
         }
     }
 }

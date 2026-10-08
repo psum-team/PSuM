@@ -17,6 +17,16 @@ test_simpleinterpDiff: test_simpleinterpDiff.cpp
 	./test_simpleinterpDiff
 	rm test_simpleinterpDiff
 
+test_higher_order_interp: test_higher_order_interp.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_higher_order_interp test_higher_order_interp.cpp $(LIBS) $(LDFLAGS)
+	./test_higher_order_interp
+	rm test_higher_order_interp
+
+test_higher_order_interpDiff: test_higher_order_interpDiff.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_higher_order_interpDiff test_higher_order_interpDiff.cpp $(LIBS) $(LDFLAGS)
+	./test_higher_order_interpDiff
+	rm test_higher_order_interpDiff
+
 test_field_interp: test_field_interp.cpp
 	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_field_interp test_field_interp.cpp $(LIBS) $(LDFLAGS)
 	./test_field_interp

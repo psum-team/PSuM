@@ -1,6 +1,7 @@
 #ifndef PSUM_FIELD_SIMPLE_INTERPOLATION_HPP
 #define PSUM_FIELD_SIMPLE_INTERPOLATION_HPP
 
+#include <cmath>
 #include "foundation.hpp"
 
 namespace psum {
@@ -99,6 +100,48 @@ namespace simple_interpolation {
     template<>
     struct diff_map<&linear_interp_1D> {
         static constexpr auto value = &diff_linear_interp_1D;
+    };
+
+    // quadratic B-spline on a uniform grid. x in [-0.5, 0.5) 
+    inline interp_coeffs<3> quadratic_bspline_1D(double s) {
+        return interp_coeffs<3>{(0.5 - s) * (0.5 - s) * 0.5,
+                                0.75 - s * s,
+                                (0.5 + s) * (0.5 + s) * 0.5};
+    }
+
+    inline interp_coeffs<3> diff_quadratic_bspline_1D(double s) {
+        return interp_coeffs<3>{s - 0.5, -2.0 * s, s + 0.5};
+    }
+
+    template<>
+    struct diff_map<&quadratic_bspline_1D> {
+        static constexpr auto value = &diff_quadratic_bspline_1D;
+    };
+
+    // cubic B-spline on a uniform grid. x in [0, 1)
+    inline interp_coeffs<4> cubic_bspline_1D(double u) {
+        auto b3 = [](double t) {
+            double a = std::abs(t);
+            if (a <= 1.0) return 2.0 / 3.0 - a * a + a * a * a / 2.0;
+            if (a <= 2.0) { double r = 2.0 - a; return r * r * r / 6.0; }
+            return 0.0;
+        };
+        return interp_coeffs<4>{b3(u + 1.0), b3(u), b3(u - 1.0), b3(u - 2.0)};
+    }
+
+    inline interp_coeffs<4> diff_cubic_bspline_1D(double u) {
+        auto d3 = [](double t) {
+            double a = std::abs(t);
+            if (a <= 1.0) return -2.0 * t + 1.5 * t * a;
+            if (a <= 2.0) { double r = 2.0 - a; return -r * r / 2.0 * (t < 0 ? -1.0 : 1.0); }
+            return 0.0;
+        };
+        return interp_coeffs<4>{d3(u + 1.0), d3(u), d3(u - 1.0), d3(u - 2.0)};
+    }
+
+    template<>
+    struct diff_map<&cubic_bspline_1D> {
+        static constexpr auto value = &diff_cubic_bspline_1D;
     };
 
 }
