@@ -95,6 +95,14 @@ namespace property {
         }
     };
 
+    struct case_id: foundation::abstract_tag {
+        inline const static std::string tag_name = "case_id";
+        template <typename Type>
+        static constexpr bool check() {
+            return std::is_integral_v<Type>;
+        }
+    };
+
     struct internal_energy: foundation::abstract_tag {
         inline const static std::string tag_name = "internal_energy";
         template <typename Type>

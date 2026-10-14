@@ -5,6 +5,7 @@
 #include "serialization.hpp"
 #include "particle_container.hpp"
 #include "field.hpp"
+#include "batch_pic.hpp"
 #include "particle_boundary.hpp"
 #include "field_solver.hpp"
 #include "particle_collision.hpp"
