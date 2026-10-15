@@ -8,6 +8,7 @@ using namespace psum;
 using namespace psum::field;
 using namespace psum::batch_pic;
 
+
 using HF = host_node_field2D<double, 1>;
 
 static bool same_content(const HF& a, const HF& b) {
@@ -20,7 +21,7 @@ int main() {
     std::vector<HF> ref;
     for (size_t c = 0; c < C; c++)
         ref.emplace_back(grid);
-    host_batch_field<HF> batch(grid, C);
+    batch_host_node_field2D<double, 1> batch(grid, C);
 
     bool ok = true;
     auto check = [&](bool cond, const std::string& what) {

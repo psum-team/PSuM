@@ -1,0 +1,8 @@
+{
+    "cases": [
+        { "dens": 5e13, "Te_ev": 2.2, "Ti_ev": 0.5, "phi_R": 12.5 },
+        { "dens": 5e13, "Te_ev": 2.2, "Ti_ev": 1.0, "phi_R": 12.5 },
+        { "dens": 5e13, "Te_ev": 2.2, "Ti_ev": 1.5, "phi_R": 12.5 },
+        { "dens": 5e13, "Te_ev": 2.2, "Ti_ev": 2.0, "phi_R": 12.5 }
+    ]
+}

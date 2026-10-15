@@ -11,13 +11,14 @@ namespace psum {
 namespace batch_pic {
 
     // A batch field is an array of host fields with same grid and queue.
-    template <typename Field>
+    template <int Dim_, field::var_loc Loc_, typename ScalarT, int QuantitySizeT = 1>
     class host_batch_field {
     public:
-        static constexpr int Dimension = Field::Dimension;
-        static constexpr field::var_loc Location = Field::Location;
-        static constexpr int QuantitySize = Field::QuantitySize;
-        using Scalar = typename Field::Scalar;
+        using Field = field::host_field<Dim_, Loc_, ScalarT, QuantitySizeT>;
+        static constexpr int Dimension = Dim_;
+        static constexpr field::var_loc Location = Loc_;
+        static constexpr int QuantitySize = QuantitySizeT;
+        using Scalar = ScalarT;
         using Value = typename Field::Value;
         using Grid = typename Field::Grid;
 
@@ -80,13 +81,16 @@ namespace batch_pic {
         std::vector<Field> fields;
     };
 
+    template <typename T>
+    struct is_host_batch_field : std::false_type {};
+    template <int D, field::var_loc L, typename S, int Q>
+    struct is_host_batch_field<host_batch_field<D, L, S, Q>> : std::true_type {};
+    template <typename Batch>
+    concept host_batch_field_type = is_host_batch_field<std::remove_cvref_t<Batch>>::value;
+
     // interp/add_back for batch fields.
     template <typename Position, typename Batch>
-    requires field::foundation::array_like<Position, Batch::Dimension> &&
-             std::is_same_v<
-                host_batch_field<field::host_field<Batch::Dimension, field::var_loc::nodeCentered, typename Batch::Scalar, Batch::QuantitySize>>,
-                std::remove_cvref_t<Batch>
-             >
+    requires field::foundation::array_like<Position, Batch::Dimension> && host_batch_field_type<Batch>
     decltype(auto) interp(
         const Position& pos,
         size_t case_id,
@@ -96,10 +100,7 @@ namespace batch_pic {
     }
 
     template <typename Batch>
-    requires std::is_same_v<
-                host_batch_field<field::host_field<Batch::Dimension, field::var_loc::nodeCentered, typename Batch::Scalar, Batch::QuantitySize>>,
-                std::remove_cvref_t<Batch>
-             >
+    requires host_batch_field_type<Batch>
     decltype(auto) interp(
         const double (&pos)[Batch::Dimension],
         size_t case_id,
@@ -109,11 +110,7 @@ namespace batch_pic {
     }
 
     template <typename Position, typename Batch>
-    requires field::foundation::array_like<Position, Batch::Dimension> &&
-             std::is_same_v<
-                host_batch_field<field::host_field<Batch::Dimension, field::var_loc::nodeCentered, typename Batch::Scalar, Batch::QuantitySize>>,
-                std::remove_cvref_t<Batch>
-             >
+    requires field::foundation::array_like<Position, Batch::Dimension> && host_batch_field_type<Batch>
     decltype(auto) interp_diff(
         const Position& pos,
         size_t case_id,
@@ -123,10 +120,7 @@ namespace batch_pic {
     }
 
     template <typename Batch>
-    requires std::is_same_v<
-                host_batch_field<field::host_field<Batch::Dimension, field::var_loc::nodeCentered, typename Batch::Scalar, Batch::QuantitySize>>,
-                std::remove_cvref_t<Batch>
-             >
+    requires host_batch_field_type<Batch>
     decltype(auto) interp_diff(
         const double (&pos)[Batch::Dimension],
         size_t case_id,
@@ -136,11 +130,7 @@ namespace batch_pic {
     }
 
     template <typename Position, typename Batch>
-    requires field::foundation::array_like<Position, Batch::Dimension> &&
-             std::is_same_v<
-                host_batch_field<field::host_field<Batch::Dimension, field::var_loc::nodeCentered, typename Batch::Scalar, Batch::QuantitySize>>,
-                std::remove_cvref_t<Batch>
-             >
+    requires field::foundation::array_like<Position, Batch::Dimension> && host_batch_field_type<Batch>
     decltype(auto) add_back(
         const Position& pos,
         const typename Batch::Value& w,
@@ -151,10 +141,7 @@ namespace batch_pic {
     }
 
     template <typename Batch>
-    requires std::is_same_v<
-                host_batch_field<field::host_field<Batch::Dimension, field::var_loc::nodeCentered, typename Batch::Scalar, Batch::QuantitySize>>,
-                std::remove_cvref_t<Batch>
-             >
+    requires host_batch_field_type<Batch>
     decltype(auto) add_back(
         const double (&pos)[Batch::Dimension],
         const typename Batch::Value& w,
@@ -165,17 +152,17 @@ namespace batch_pic {
     }
 
     template <typename Scalar, int QuantitySize = 1>
-    using batch_host_cell_field1D = host_batch_field<field::host_cell_field1D<Scalar, QuantitySize>>;
+    using batch_host_cell_field1D = host_batch_field<1, field::var_loc::cellCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_host_node_field1D = host_batch_field<field::host_node_field1D<Scalar, QuantitySize>>;
+    using batch_host_node_field1D = host_batch_field<1, field::var_loc::nodeCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_host_cell_field2D = host_batch_field<field::host_cell_field2D<Scalar, QuantitySize>>;
+    using batch_host_cell_field2D = host_batch_field<2, field::var_loc::cellCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_host_node_field2D = host_batch_field<field::host_node_field2D<Scalar, QuantitySize>>;
+    using batch_host_node_field2D = host_batch_field<2, field::var_loc::nodeCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_host_cell_field3D = host_batch_field<field::host_cell_field3D<Scalar, QuantitySize>>;
+    using batch_host_cell_field3D = host_batch_field<3, field::var_loc::cellCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_host_node_field3D = host_batch_field<field::host_node_field3D<Scalar, QuantitySize>>;
+    using batch_host_node_field3D = host_batch_field<3, field::var_loc::nodeCentered, Scalar, QuantitySize>;
 }
 
 }

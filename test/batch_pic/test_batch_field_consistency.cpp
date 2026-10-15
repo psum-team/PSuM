@@ -7,6 +7,7 @@ using namespace psum;
 using namespace psum::field;
 using namespace psum::batch_pic;
 
+
 using NF = node_field2D<double, 1>;
 
 static bool same_content(const NF& a, const NF& b) {
@@ -23,7 +24,7 @@ int main() {
     std::vector<NF> ref;
     for (size_t c = 0; c < C; c++)
         ref.emplace_back(q, grid);
-    device_batch_field<NF> batch(q, grid, C);
+    batch_node_field2D<double, 1> batch(q, grid, C);
 
     bool ok = true;
     auto check = [&](bool cond, const std::string& what) {

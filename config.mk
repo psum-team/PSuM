@@ -38,6 +38,8 @@ USE_SYCL_MULTIGRID32F_GPU ?= 1
 # --------------------------------------------------------------------
 LIBS = -lstdc++
 FIELD_SOLVER_BIN = $(PROJECT_ROOT)/src/field_solver/bin
+# placeholder backend (solve throws): held by batch wrappers to avoid backend memory
+PSUM_FIELD_SOLVER_BACKENDS += $(FIELD_SOLVER_BIN)/dummy.o
 
 ifeq ($(USE_CUDA), 1)
     LIBS     += -lcudart -lcusparse -lcublas -lnvrtc
@@ -77,3 +79,13 @@ ifeq ($(USE_SYCL_MULTIGRID32F_GPU), 1)
 endif
 
 USE_BACKENDS = -Wl,--whole-archive $(FIELD_SOLVER_BIN)/registry.o $(FIELD_SOLVER_BIN)/impls.o -Wl,--no-whole-archive
+
+# --------------------------------------------------------------------
+# batch_pic batch_field_solver backends 批处理场求解器后端
+# --------------------------------------------------------------------
+BATCH_FIELD_SOLVER_BIN = $(PROJECT_ROOT)/src/batch_pic/batch_field_solver/bin
+PSUM_BATCH_SOLVER_BACKENDS += $(BATCH_FIELD_SOLVER_BIN)/eigen_sparselu_mrhs_cpu.o
+ifeq ($(USE_CUDA), 1)
+    PSUM_BATCH_SOLVER_BACKENDS += $(BATCH_FIELD_SOLVER_BIN)/cuda_sparselu_mrhs_gpu.o
+endif
+USE_BATCH_BACKENDS = -Wl,--whole-archive $(BATCH_FIELD_SOLVER_BIN)/registry.o $(BATCH_FIELD_SOLVER_BIN)/impls.o -Wl,--no-whole-archive

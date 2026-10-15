@@ -70,7 +70,7 @@ public:
         solve(phi.data(), b_.data());
     }
 
-    inline void make_righthand_item(double* b) {
+    inline void evaluate_boundary_elements() {
         fbl_.evaluate(replace_elements_.second);
         mbl_.evaluate(mixed_boundary_values_);
 
@@ -82,12 +82,16 @@ public:
             for (decltype(M_)::InnerIterator it(M_, k); it; ++it) {
                 reach_inner_loop = true;
                 if (it.row() != addback_elements_.first[count])
-                    throw std::runtime_error("make_righthand_item: addback_elements_ status broken.");
+                    throw std::runtime_error("evaluate_boundary_elements: addback_elements_ status broken.");
                 addback_elements_.second[count] += it.value() * mixed_boundary_values_[it.col()];
             }
             if (reach_inner_loop)
                 count++;
         }
+    }
+
+    inline void make_righthand_item(double* b) {
+        evaluate_boundary_elements();
         if (backend_name_ == "native") {
             // add back source here
             for (size_t i = 0; i < addback_elements_.first.size(); i++)
@@ -100,6 +104,14 @@ public:
             backend_.set_source_addback(addback_elements_.first.size(), addback_elements_.first.data(), addback_elements_.second.data());
             backend_.set_source_replace(replace_elements_.first.size(), replace_elements_.first.data(), replace_elements_.second.data());
         }
+    }
+
+    inline std::pair<std::vector<unsigned long long>, std::vector<double>>& replace_elements() {
+        return replace_elements_;
+    }
+
+    inline std::pair<std::vector<unsigned long long>, std::vector<double>>& addback_elements() {
+        return addback_elements_;
     }
 
     inline void solve(double* phi, double* source) {

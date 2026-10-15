@@ -161,10 +161,22 @@ public:
         solve(phi.data(), b_.data());
     }
 
-    inline void make_righthand_item(double* b)
+    inline void evaluate_boundary_elements()
     {
         fbl_.evaluate(replace_elements_.second);
         mbl_.evaluate(addback_elements_.second);
+    }
+    inline const std::pair<std::vector<unsigned long long>, std::vector<double>>& replace_elements() const
+    {
+        return replace_elements_;
+    }
+    inline const std::pair<std::vector<unsigned long long>, std::vector<double>>& addback_elements() const
+    {
+        return addback_elements_;
+    }
+    inline void make_righthand_item(double* b)
+    {
+        evaluate_boundary_elements();
 
         for (size_t i = 0; i < addback_elements_.first.size(); i++)
             b[addback_elements_.first[i]] += addback_elements_.second[i];

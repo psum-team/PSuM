@@ -37,13 +37,14 @@ namespace batch_pic {
     }
 
     // A batch field is an array of device fields with same grid and queue.
-    template <typename Field>
+    template <int Dim_, field::var_loc Loc_, typename ScalarT, int QuantitySizeT = 1>
     class device_batch_field {
     public:
-        static constexpr int Dimension = Field::Dimension;
-        static constexpr field::var_loc Location = Field::Location;
-        static constexpr int QuantitySize = Field::QuantitySize;
-        using Scalar = typename Field::Scalar;
+        using Field = field::device_field<Dim_, Loc_, ScalarT, QuantitySizeT>;
+        static constexpr int Dimension = Dim_;
+        static constexpr field::var_loc Location = Loc_;
+        static constexpr int QuantitySize = QuantitySizeT;
+        using Scalar = ScalarT;
         using Value = typename Field::Value;
         using Grid = typename Field::Grid;
         using FieldAcc = typename Field::acc_type;
@@ -135,15 +136,20 @@ namespace batch_pic {
         std::vector<Value*> established_ptrs;
     };
 
+    template <typename T>
+    struct is_device_field_acc : std::false_type {};
+    template <int D, field::var_loc L, typename S, typename V, int Q>
+    struct is_device_field_acc<field::device_field_acc<D, L, S, V, Q>> : std::true_type {};
+
     template <typename BatchAcc>
-    concept basic_batch_acc = requires(BatchAcc acc, size_t c) {
-        typename BatchAcc::value_type;
-        { acc[c] } -> std::convertible_to<typename BatchAcc::value_type&>;
-    };
+    concept device_batch_acc = requires(BatchAcc acc, size_t c) {
+            typename BatchAcc::value_type;
+            { acc[c] } -> std::convertible_to<typename BatchAcc::value_type&>;
+        } && is_device_field_acc<typename BatchAcc::value_type>::value;
 
     // interp/add_back for batch fields.
     template <typename Position, typename BatchAcc>
-    requires basic_batch_acc<BatchAcc> &&
+    requires device_batch_acc<BatchAcc> &&
              field::foundation::array_like<Position, BatchAcc::value_type::Dimension>
     decltype(auto) interp(
         const Position& pos,
@@ -154,7 +160,7 @@ namespace batch_pic {
     }
 
     template <typename BatchAcc>
-    requires basic_batch_acc<BatchAcc>
+    requires device_batch_acc<BatchAcc>
     decltype(auto) interp(
         const double (&pos)[BatchAcc::value_type::Dimension],
         size_t case_id,
@@ -164,7 +170,7 @@ namespace batch_pic {
     }
 
     template <typename Position, typename BatchAcc>
-    requires basic_batch_acc<BatchAcc> &&
+    requires device_batch_acc<BatchAcc> &&
              field::foundation::array_like<Position, BatchAcc::value_type::Dimension>
     decltype(auto) interp_diff(
         const Position& pos,
@@ -175,7 +181,7 @@ namespace batch_pic {
     }
 
     template <typename BatchAcc>
-    requires basic_batch_acc<BatchAcc>
+    requires device_batch_acc<BatchAcc>
     decltype(auto) interp_diff(
         const double (&pos)[BatchAcc::value_type::Dimension],
         size_t case_id,
@@ -185,7 +191,7 @@ namespace batch_pic {
     }
 
     template <typename Position, typename BatchAcc>
-    requires basic_batch_acc<BatchAcc> &&
+    requires device_batch_acc<BatchAcc> &&
              field::foundation::array_like<Position, BatchAcc::value_type::Dimension>
     decltype(auto) add_back(
         const Position& pos,
@@ -197,7 +203,7 @@ namespace batch_pic {
     }
 
     template <typename BatchAcc>
-    requires basic_batch_acc<BatchAcc>
+    requires device_batch_acc<BatchAcc>
     decltype(auto) add_back(
         const double (&pos)[BatchAcc::value_type::Dimension],
         const typename BatchAcc::value_type::Value& w,
@@ -208,17 +214,17 @@ namespace batch_pic {
     }
 
     template <typename Scalar, int QuantitySize = 1>
-    using batch_cell_field1D = device_batch_field<field::cell_field1D<Scalar, QuantitySize>>;
+    using batch_cell_field1D = device_batch_field<1, field::var_loc::cellCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_node_field1D = device_batch_field<field::node_field1D<Scalar, QuantitySize>>;
+    using batch_node_field1D = device_batch_field<1, field::var_loc::nodeCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_cell_field2D = device_batch_field<field::cell_field2D<Scalar, QuantitySize>>;
+    using batch_cell_field2D = device_batch_field<2, field::var_loc::cellCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_node_field2D = device_batch_field<field::node_field2D<Scalar, QuantitySize>>;
+    using batch_node_field2D = device_batch_field<2, field::var_loc::nodeCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_cell_field3D = device_batch_field<field::cell_field3D<Scalar, QuantitySize>>;
+    using batch_cell_field3D = device_batch_field<3, field::var_loc::cellCentered, Scalar, QuantitySize>;
     template <typename Scalar, int QuantitySize = 1>
-    using batch_node_field3D = device_batch_field<field::node_field3D<Scalar, QuantitySize>>;
+    using batch_node_field3D = device_batch_field<3, field::var_loc::nodeCentered, Scalar, QuantitySize>;
 }
 
 }
