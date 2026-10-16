@@ -24,8 +24,9 @@ namespace batch_pic {
         for (size_t c = 0; c < to.batch_size(); c++) {
             if (from.at(c).size() != to.at(c).size())
                 throw std::runtime_error("batch field copy: field size mismatch");
-            q.memcpy(to.at(c).data(), from.at(c).data(), to.at(c).size() * sizeof(Scalar)).wait();
+            q.memcpy(to.at(c).data(), from.at(c).data(), to.at(c).size() * sizeof(Scalar));
         }
+        q.wait();   // queues are in-order, one sync for the whole batch
     }
 
     template <int Dim_, field::var_loc Loc_, typename Scalar, int QuantitySize>
@@ -37,8 +38,9 @@ namespace batch_pic {
         for (size_t c = 0; c < from.batch_size(); c++) {
             if (from.at(c).size() != to.at(c).size())
                 throw std::runtime_error("batch field copy: field size mismatch");
-            q.memcpy(to.at(c).data(), from.at(c).data(), to.at(c).size() * sizeof(Scalar)).wait();
+            q.memcpy(to.at(c).data(), from.at(c).data(), to.at(c).size() * sizeof(Scalar));
         }
+        q.wait();   // queues are in-order, one sync for the whole batch
     }
 
     // conversions between a batch field (quantity size 1) and the linear arrangement used by the batch solver interfaces (row-major interleaved).

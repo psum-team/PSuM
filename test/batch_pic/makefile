@@ -30,4 +30,4 @@ test_cuda_sparselu_mrhs: test_batch_poisson_solver_2d.cpp
 	rm -f test_cuda_sparselu_mrhs
 
 clean:
-	rm -f test_batch_field_consistency test_host_batch_field_consistency test_cuda_sparselu_mrhs test_batch_poisson_solver_2d test_batch_poisson_solver_1d test_batch_poisson_solver_2d_cuda
+	rm -f test_batch_field_consistency test_host_batch_field_consistency test_cuda_sparselu_mrhs test_batch_poisson_solver_2d test_batch_poisson_solver_1d
