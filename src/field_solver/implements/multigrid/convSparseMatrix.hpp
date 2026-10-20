@@ -313,6 +313,13 @@ struct matrix_traits<ConvSparseMatrix<double>> {
     using Scalar = double;
     using Vector = Eigen::VectorXd;
 
+    static void set(int batch, ConvSparseMatrix<double>& dest, const Eigen::SparseMatrix<double>& src) {
+        if (batch != 1) {
+            throw std::invalid_argument("ConvSparseMatrix: batch size must be 1");
+        }
+        set(dest, src);
+    }
+
     static void multiply(const ConvSparseMatrix<double>& mat, const Vector& in, Vector& out) {
         mat.multiply(in, out);
     }

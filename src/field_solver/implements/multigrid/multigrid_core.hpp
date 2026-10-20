@@ -36,8 +36,12 @@ struct multigrid_core {
         stay
     };
 
-    inline void setup(const EigenSpMatrix& A, const std::vector<EigenSpMatrix>& RMats, double c_coeff)
-    {
+    inline void setup(const EigenSpMatrix& A, const std::vector<EigenSpMatrix>& RMats, double c_coeff) {
+        setup(1, A, RMats, c_coeff);
+    }
+
+    inline void setup(int batch, const EigenSpMatrix& A, const std::vector<EigenSpMatrix>& RMats, double c_coeff) {
+        batch_ = batch;
         std::vector<Eigen::ArrayXd> dmat_inv_tmp;
         std::vector<EigenSpMatrix> relax_mats_tmp;
         std::vector<EigenSpMatrix> restrict_mats_tmp;
@@ -105,9 +109,9 @@ struct multigrid_core {
         
         for (int i = 0; i < a_mats_tmp.size(); i++)
         {
-            x_items_[i].resize(a_mats_tmp[i].cols());
-            b_items_[i].resize(a_mats_tmp[i].cols());
-            buf_vec_[i].resize(a_mats_tmp[i].cols());
+            vector_traits<Vector>::resize(x_items_[i], a_mats_tmp[i].cols(), batch);
+            vector_traits<Vector>::resize(b_items_[i], a_mats_tmp[i].cols(), batch);
+            vector_traits<Vector>::resize(buf_vec_[i], a_mats_tmp[i].cols(), batch);
         }
 
         EigenSpMatrix A_coarse = a_mats_tmp.back();
@@ -123,19 +127,19 @@ struct multigrid_core {
 
         relax_mats_.resize(relax_mats_tmp.size());
         for (int i = 0; i < relax_mats_.size(); i++)
-            matrix_traits<MatrixType>::set(relax_mats_[i], relax_mats_tmp[i]);
+            matrix_traits<MatrixType>::set(batch, relax_mats_[i], relax_mats_tmp[i]);
         
         restrict_mats_.resize(restrict_mats_tmp.size());
         for (int i = 0; i < restrict_mats_.size(); i++)
-            matrix_traits<MatrixType>::set(restrict_mats_[i], restrict_mats_tmp[i]);
+            matrix_traits<MatrixType>::set(batch, restrict_mats_[i], restrict_mats_tmp[i]);
         
         interpolate_mats_.resize(interpolate_mats_tmp.size());
         for (int i = 0; i < interpolate_mats_.size(); i++)
-            matrix_traits<MatrixType>::set(interpolate_mats_[i], interpolate_mats_tmp[i]);
+            matrix_traits<MatrixType>::set(batch, interpolate_mats_[i], interpolate_mats_tmp[i]);
 
         a_mats_.resize(a_mats_tmp.size());
         for (int i = 0; i < a_mats_.size(); i++)
-            matrix_traits<MatrixType>::set(a_mats_[i], a_mats_tmp[i]);
+            matrix_traits<MatrixType>::set(batch, a_mats_[i], a_mats_tmp[i]);
     }
 
     inline void set_relax_counts(int pre, int post)
@@ -180,14 +184,15 @@ struct multigrid_core {
 private:
     int pre_relax_ = 1;
     int post_relax_ = 1;
+    int batch_ = 1;
 
     inline void solve_sequence(const std::vector<std::pair<int, ShiftGrid>>& sequence, const Vector& in, Vector& out)
     {
         vector_traits<Vector>::hadamard_to(in, dmat_inv_[0], b_items_[0]);
-        if (x_items_.front().rows() != out.rows())
+        if (x_items_.front().rows() != out.rows() || vector_traits<Vector>::batch_size(x_items_.front()) != vector_traits<Vector>::batch_size(out))
         {
             x_items_[0].setZero();
-            out.resize(x_items_.front().rows());
+            vector_traits<Vector>::resize(out, x_items_.front().rows(), vector_traits<Vector>::batch_size(x_items_.front()));
         }
         else
         {
@@ -220,7 +225,8 @@ private:
                     }
                     else
                     {
-                        if (x_items_.front().rows() != out.rows()) out.resize(x_items_.front().rows());
+                        if (x_items_.front().rows() != out.rows() || vector_traits<Vector>::batch_size(x_items_.front()) != vector_traits<Vector>::batch_size(out))
+                            vector_traits<Vector>::resize(out, x_items_.front().rows(), vector_traits<Vector>::batch_size(x_items_.front()));
                         vector_traits<Vector>::copy_data(out, x_items_.front());
                         return;
                     }

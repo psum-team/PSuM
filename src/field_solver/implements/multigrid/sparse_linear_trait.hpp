@@ -37,6 +37,13 @@ struct matrix_traits<Eigen::SparseMatrix<double>> {
     static void set(Eigen::SparseMatrix<double>& dest, const Eigen::SparseMatrix<double>& src) {
         dest = src;
     }
+
+    static void set(int batch, Eigen::SparseMatrix<double>& dest, const Eigen::SparseMatrix<double>& src) {
+        if (batch != 1) {
+            throw std::invalid_argument("Eigen::SparseMatrix<double>: batch size must be 1");
+        }
+        dest = src;
+    }
 };
 
 template <>
@@ -57,10 +64,26 @@ struct matrix_traits<Eigen::SparseMatrix<double, Eigen::RowMajor>> {
     static void set(Eigen::SparseMatrix<double, Eigen::RowMajor>& dest, const Eigen::SparseMatrix<double>& src) {
         dest = src;
     }
+
+    static void set(int batch, Eigen::SparseMatrix<double, Eigen::RowMajor>& dest, const Eigen::SparseMatrix<double>& src) {
+        if (batch != 1) {
+            throw std::invalid_argument("Eigen::SparseMatrix<double, Eigen::RowMajor>: batch size must be 1");
+        }
+        dest = src;
+    }
 };
 
 template <>
 struct vector_traits<Eigen::VectorXd> {
+    static void resize(Eigen::VectorXd& dest, int n, int batch = 1) {
+        if (batch != 1) {
+            throw std::invalid_argument("Eigen::VectorXd: batch size must be 1");
+        }
+        dest.resize(n);
+    }
+
+    static int batch_size(const Eigen::VectorXd&) { return 1; }
+
     static Eigen::VectorXd add(const Eigen::VectorXd& a, const Eigen::VectorXd& b) {
         return a + b;
     }

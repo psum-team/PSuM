@@ -28,12 +28,18 @@ public:
         set_matrix(matrix);
     }
 
+    sycl_coo_spmv(int batch, const Eigen::SparseMatrix<T>& matrix, sycl::queue q)
+        : queue_(q) {
+        set_matrix(batch, matrix);
+    }
+
     sycl_coo_spmv(const sycl_coo_spmv&) = delete;
     sycl_coo_spmv& operator=(const sycl_coo_spmv&) = delete;
 
     sycl_coo_spmv(sycl_coo_spmv&& other) noexcept
         : queue_(other.queue_),
           rows_(other.rows_), cols_(other.cols_), nnz_(other.nnz_),
+          batch_(other.batch_),
           row_indices_(other.row_indices_), col_indices_(other.col_indices_),
           values_(other.values_), scratch_(other.scratch_) {
         other.zero_out_();
@@ -44,6 +50,7 @@ public:
             free_all_();
             queue_ = other.queue_;
             rows_ = other.rows_; cols_ = other.cols_; nnz_ = other.nnz_;
+            batch_ = other.batch_;
             row_indices_ = other.row_indices_; col_indices_ = other.col_indices_;
             values_ = other.values_; scratch_ = other.scratch_;
             other.zero_out_();
@@ -54,7 +61,15 @@ public:
     ~sycl_coo_spmv() { free_all_(); }
 
     void set_matrix(const Eigen::SparseMatrix<T>& matrix) {
+        set_matrix(1, matrix);
+    }
+
+    void set_matrix(int batch, const Eigen::SparseMatrix<T>& matrix) {
+        if (batch < 1) {
+            throw std::invalid_argument("sycl_coo_spmv: batch size must be >= 1");
+        }
         free_all_();
+        batch_ = batch;
         rows_ = static_cast<unsigned long long>(matrix.rows());
         cols_ = static_cast<unsigned long long>(matrix.cols());
         nnz_ = static_cast<unsigned long long>(matrix.nonZeros());
@@ -81,7 +96,7 @@ public:
 
     inline void apply(const T* x, T* y) {
         if (rows_ > 0) {
-            queue_.memset(y, 0, sizeof(T) * rows_);
+            queue_.memset(y, 0, sizeof(T) * rows_ * batch_);
         }
         if (nnz_ == 0) return;
 
@@ -89,16 +104,31 @@ public:
         unsigned long long* cols = col_indices_;
         T* vals = values_;
         unsigned long long nnz = nnz_;
+        int batch = batch_;
 
-        queue_.submit([&](sycl::handler& h) {
-            h.parallel_for(sycl::range<1>(nnz), [=](sycl::id<1> item) {
-                unsigned long long i = item[0];
-                sycl::atomic_ref<T, sycl::memory_order::relaxed,
-                                 sycl::memory_scope::device,
-                                 sycl::access::address_space::global_space> ref(y[rows[i]]);
-                ref.fetch_add(vals[i] * x[cols[i]]);
+        if (batch == 1) {
+            queue_.submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<1>(nnz), [=](sycl::id<1> item) {
+                    unsigned long long i = item[0];
+                    sycl::atomic_ref<T, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space> ref(y[rows[i]]);
+                    ref.fetch_add(vals[i] * x[cols[i]]);
+                });
             });
-        });
+        } else {
+            queue_.submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<2>(nnz, batch), [=](sycl::id<2> item) {
+                    unsigned long long i = item[0];
+                    int c = item[1];
+                    sycl::atomic_ref<T, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        ref(y[rows[i] * batch + c]);
+                    ref.fetch_add(vals[i] * x[cols[i] * batch + c]);
+                });
+            });
+        }
     }
 
     unsigned long long rows() const { return rows_; }
@@ -106,6 +136,7 @@ public:
 private:
     sycl::queue queue_{sycl::default_selector_v};
     unsigned long long rows_ = 0, cols_ = 0, nnz_ = 0;
+    int batch_ = 1;
     unsigned long long* row_indices_ = nullptr;
     unsigned long long* col_indices_ = nullptr;
     T* values_ = nullptr;
@@ -124,6 +155,7 @@ private:
         row_indices_ = col_indices_ = nullptr;
         values_ = scratch_ = nullptr;
         rows_ = cols_ = nnz_ = 0;
+        batch_ = 1;
     }
 
     template <typename U>
@@ -149,6 +181,7 @@ struct ConvSyclSparseMatrix {
 
     sycl::queue queue_;
     int MatRows_ = 0;
+    int batch_ = 1;
     bool Anchor_at_max_ = false;
 
     int num_groups_ = 0;
@@ -181,6 +214,7 @@ struct ConvSyclSparseMatrix {
     ConvSyclSparseMatrix(ConvSyclSparseMatrix&& other) noexcept
         : queue_(other.queue_),
           MatRows_(other.MatRows_),
+          batch_(other.batch_),
           Anchor_at_max_(other.Anchor_at_max_),
           num_groups_(other.num_groups_),
           total_conv_rows_(other.total_conv_rows_),
@@ -205,6 +239,7 @@ struct ConvSyclSparseMatrix {
             free_device_storage_();
             queue_ = other.queue_;
             MatRows_ = other.MatRows_;
+            batch_ = other.batch_;
             Anchor_at_max_ = other.Anchor_at_max_;
             num_groups_ = other.num_groups_;
             total_conv_rows_ = other.total_conv_rows_;
@@ -231,11 +266,15 @@ struct ConvSyclSparseMatrix {
     }
 
     template<int Eigen_T2, typename Eigen_T3>
-    void set(const Eigen::SparseMatrix<T, Eigen_T2, Eigen_T3>& mat) {
+    void set(int batch, const Eigen::SparseMatrix<T, Eigen_T2, Eigen_T3>& mat) {
+        if (batch <= 0) {
+            throw std::invalid_argument("ConvSyclSparseMatrix: batch must be positive");
+        }
         free_device_storage_();
         if (sycl_vector<T>::default_queue_ != nullptr) {
             queue_ = *sycl_vector<T>::default_queue_;
         }
+        batch_ = batch;
         MatRows_ = mat.rows();
         original_mat_ = mat;
 
@@ -246,8 +285,20 @@ struct ConvSyclSparseMatrix {
     }
 
     template<int Eigen_T2, typename Eigen_T3>
-    void set(const Eigen::SparseMatrix<T, Eigen_T2, Eigen_T3>& mat, int num_conv_mask) {
+    void set(const Eigen::SparseMatrix<T, Eigen_T2, Eigen_T3>& mat) {
+        set(1, mat);
+    }
+
+    template<int Eigen_T2, typename Eigen_T3>
+    void set(int batch, const Eigen::SparseMatrix<T, Eigen_T2, Eigen_T3>& mat, int num_conv_mask) {
+        if (batch <= 0) {
+            throw std::invalid_argument("ConvSyclSparseMatrix: batch must be positive");
+        }
         free_device_storage_();
+        if (sycl_vector<T>::default_queue_ != nullptr) {
+            queue_ = *sycl_vector<T>::default_queue_;
+        }
+        batch_ = batch;
 
         ConvSparseMatrix<T> cpu_analyzer;
         cpu_analyzer.set(mat, num_conv_mask);
@@ -261,10 +312,15 @@ struct ConvSyclSparseMatrix {
         alloc_multiply_scratch_();
     }
 
+    template<int Eigen_T2, typename Eigen_T3>
+    void set(const Eigen::SparseMatrix<T, Eigen_T2, Eigen_T3>& mat, int num_conv_mask) {
+        set(1, mat, num_conv_mask);
+    }
+
     void multiply(const T* d_in, T* d_out) {
         if (MatRows_ == 0) return;
 
-        queue_.memset(d_out, 0, sizeof(T) * MatRows_);
+        queue_.memset(d_out, 0, sizeof(T) * MatRows_ * batch_);
 
         if (num_residual_rows_ > 0) {
             residual_spmv_.apply(d_in, d_compact_buf_);
@@ -279,7 +335,7 @@ struct ConvSyclSparseMatrix {
     void multiply_add(const T* d_in, const T* d_b, T* d_out, T b_coeff, T ans_coeff) {
         multiply(d_in, multiply_scratch_);
 
-        int N = MatRows_;
+        int N = MatRows_ * batch_;
         T* scratch = multiply_scratch_;
         queue_.submit([&](sycl::handler& h) {
             h.parallel_for(sycl::range<1>(N), [=](sycl::id<1> idx) {
@@ -311,6 +367,7 @@ private:
         total_stencil_entries_ = 0;
         num_residual_rows_ = 0;
         MatRows_ = 0;
+        batch_ = 1;
     }
 
     template<typename U>
@@ -334,7 +391,7 @@ private:
 
     void alloc_multiply_scratch_() {
         if (MatRows_ > 0) {
-            multiply_scratch_ = sycl::malloc_device<T>(MatRows_, queue_);
+            multiply_scratch_ = sycl::malloc_device<T>(static_cast<size_t>(MatRows_) * batch_, queue_);
             if (multiply_scratch_ == nullptr) {
                 throw std::runtime_error("ConvSyclSparseMatrix: scratch allocation failed");
             }
@@ -407,9 +464,9 @@ private:
             d_non_all_zero_rows_ = alloc_copy_(cpu.non_all_zero_rows);
 
             Eigen::SparseMatrix<T> col_rest = cpu.restMat;
-            residual_spmv_ = sycl_coo_spmv<T>(col_rest, queue_);
+            residual_spmv_ = sycl_coo_spmv<T>(batch_, col_rest, queue_);
 
-            d_compact_buf_ = sycl::malloc_device<T>(num_residual_rows_, queue_);
+            d_compact_buf_ = sycl::malloc_device<T>(static_cast<size_t>(num_residual_rows_) * batch_, queue_);
             if (d_compact_buf_ == nullptr) {
                 throw std::runtime_error("ConvSyclSparseMatrix: compact buffer allocation failed");
             }
@@ -418,14 +475,24 @@ private:
 
     void scatter_kernel_(T* d_out) {
         int count = num_residual_rows_;
+        int batch = batch_;
         int* rows = d_non_all_zero_rows_;
         T* compact = d_compact_buf_;
 
-        queue_.submit([&](sycl::handler& h) {
-            h.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-                d_out[rows[idx]] = compact[idx];
+        if (batch == 1) {
+            queue_.submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
+                    d_out[rows[idx]] = compact[idx];
+                });
             });
-        });
+        } else {
+            queue_.submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<2>(count, batch), [=](sycl::id<2> idx) {
+                    int i = idx[0], c = idx[1];
+                    d_out[rows[i] * batch + c] = compact[i * batch + c];
+                });
+            });
+        }
     }
 
     void conv_kernel_(const T* d_in, T* d_out) {
@@ -437,23 +504,43 @@ private:
         int* s_offsets = d_stencil_col_offsets_;
         bool anchor_mode = Anchor_at_max_;
         int total = total_conv_rows_;
+        int batch = batch_;
         const T* in = d_in;
         T* out = d_out;
 
-        queue_.submit([&](sycl::handler& h) {
-            h.parallel_for(sycl::range<1>(total), [=](sycl::id<1> idx) {
-                int row = rows[idx];
-                int anchor = anchor_mode ? anchors[idx] : row;
-                int g = group_ids[idx];
-                int c_off = groups[g].coeff_offset;
-                int c_cnt = groups[g].coeff_count;
-                T v = T(0);
-                for (int c = 0; c < c_cnt; c++) {
-                    v += s_vals[c_off + c] * in[s_offsets[c_off + c] + anchor];
-                }
-                out[row] = v;
+        if (batch == 1) {
+            queue_.submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<1>(total), [=](sycl::id<1> idx) {
+                    int row = rows[idx];
+                    int anchor = anchor_mode ? anchors[idx] : row;
+                    int g = group_ids[idx];
+                    int c_off = groups[g].coeff_offset;
+                    int c_cnt = groups[g].coeff_count;
+                    T v = T(0);
+                    for (int c = 0; c < c_cnt; c++) {
+                        v += s_vals[c_off + c] * in[s_offsets[c_off + c] + anchor];
+                    }
+                    out[row] = v;
+                });
             });
-        });
+        } else {
+            queue_.submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<2>(total, batch), [=](sycl::id<2> idx) {
+                    int i = idx[0], b = idx[1];
+                    int row = rows[i];
+                    int anchor = anchor_mode ? anchors[i] : row;
+                    int g = group_ids[i];
+                    int c_off = groups[g].coeff_offset;
+                    int c_cnt = groups[g].coeff_count;
+                    T v = T(0);
+                    for (int cc = 0; cc < c_cnt; cc++) {
+                        v += s_vals[c_off + cc] *
+                             in[(s_offsets[c_off + cc] + anchor) * batch + b];
+                    }
+                    out[row * batch + b] = v;
+                });
+            });
+        }
     }
 
     void free_device_storage_() {
@@ -487,6 +574,18 @@ struct matrix_traits<ConvSyclSparseMatrix<T>> {
     static void multiply_add(ConvSyclSparseMatrix<T>& mat, const Vector& x,
                              const Vector& b, Vector& out, T b_coeff = T(1), T ans_coeff = T(1)) {
         mat.multiply_add(x.data(), b.data(), out.data(), b_coeff, ans_coeff);
+    }
+
+    static void set(int batch, ConvSyclSparseMatrix<T>& dest, const Eigen::SparseMatrix<double>& src) {
+        if (batch <= 0) {
+            throw std::invalid_argument("ConvSyclSparseMatrix: batch must be positive");
+        }
+        if constexpr (std::is_same_v<T, double>) {
+            dest.set(batch, src);
+        } else {
+            Eigen::SparseMatrix<T> src_t = src.cast<T>();
+            dest.set(batch, src_t);
+        }
     }
 
     static void set(ConvSyclSparseMatrix<T>& dest, const Eigen::SparseMatrix<double>& src) {

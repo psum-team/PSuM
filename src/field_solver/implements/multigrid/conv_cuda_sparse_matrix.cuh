@@ -640,6 +640,13 @@ struct matrix_traits<ConvCudaSparseMatrix<double>> {
         mat.multiply_add(x.data(), b.data(), out.data(), b_coeff, ans_coeff);
     }
 
+    static void set(int batch, ConvCudaSparseMatrix<double>& dest, const Eigen::SparseMatrix<double>& src) {
+        if (batch != 1) {
+            throw std::invalid_argument("ConvCudaSparseMatrix: batch size must be 1");
+        }
+        set(dest, src);
+    }
+
     static void set(ConvCudaSparseMatrix<double>& dest, const Eigen::SparseMatrix<double>& src) {
         dest.set(src);
     }

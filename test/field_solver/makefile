@@ -126,4 +126,19 @@ test_schur_state_save_load: test_schur_state_save_load.cpp
 test_device_mg_compare: test_device_multigrid_compare.cpp
 	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) test_device_multigrid_compare.cpp -o test_device_mg_compare $(USE_BACKENDS) $(LIBS) $(LDFLAGS)
 
+test_sycl_vector_broadcast: test_sycl_vector_broadcast.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_sycl_vector_broadcast test_sycl_vector_broadcast.cpp $(LIBS) $(LDFLAGS)
+	./test_sycl_vector_broadcast
+	rm test_sycl_vector_broadcast
+
+test_conv_sycl_batch: test_conv_sycl_batch.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_conv_sycl_batch test_conv_sycl_batch.cpp $(LIBS) $(LDFLAGS)
+	./test_conv_sycl_batch
+	rm test_conv_sycl_batch
+
+test_mg_core_sycl_batch: test_mg_core_sycl_batch.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_mg_core_sycl_batch test_mg_core_sycl_batch.cpp $(LIBS) $(LDFLAGS)
+	./test_mg_core_sycl_batch
+	rm test_mg_core_sycl_batch
+
 test_multigrid: test_mg_core test_conv_matvec test_native_vs_mg_2d test_native_vs_mg_3d

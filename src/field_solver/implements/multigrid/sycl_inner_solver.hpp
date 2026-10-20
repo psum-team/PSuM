@@ -79,23 +79,40 @@ struct sycl_inner_solver {
     }
 
     void solve_to(const sycl_vector<T>& b, sycl_vector<T>& result) const {
+        int batch = b.batch_size();
         int n = size_;
-        result.resize(n);
+        result.resize(n, batch);
         auto* q = sycl_vector<T>::default_queue_;
         T* d_out = result.data();
         const T* d_b = b.data();
         T* d_mat = d_inv_;
         int stride = n;
 
-        q->submit([&](sycl::handler& h) {
-            h.parallel_for(sycl::range<1>(n), [=](sycl::id<1> idx) {
-                T sum = T(0);
-                for (int j = 0; j < stride; j++) {
-                    sum += d_mat[idx * stride + j] * d_b[j];
-                }
-                d_out[idx] = sum;
+        if (n != b.rows()) {
+            throw std::runtime_error("sycl_inner_solver: input size mismatch");
+        }
+        if (batch == 1) {
+            q->submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<1>(n), [=](sycl::id<1> idx) {
+                    T sum = T(0);
+                    for (int j = 0; j < stride; j++) {
+                        sum += d_mat[idx * stride + j] * d_b[j];
+                    }
+                    d_out[idx] = sum;
+                });
             });
-        });
+        } else {
+            q->submit([&](sycl::handler& h) {
+                h.parallel_for(sycl::range<2>(n, batch), [=](sycl::id<2> idx) {
+                    int row = idx[0], c = idx[1];
+                    T sum = T(0);
+                    for (int j = 0; j < stride; j++) {
+                        sum += d_mat[row * stride + j] * d_b[j * batch + c];
+                    }
+                    d_out[row * batch + c] = sum;
+                });
+            });
+        }
     }
 
 private:

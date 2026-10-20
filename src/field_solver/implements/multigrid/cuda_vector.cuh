@@ -140,6 +140,15 @@ inline cusparseHandle_t cuda_multigrid_cusparse_handle(cudaStream_t) {
 
 template <>
 struct vector_traits<cuda_vector> {
+    static void resize(cuda_vector& dest, int n, int batch = 1) {
+        if (batch != 1) {
+            throw std::invalid_argument("cuda_vector: batch size must be 1");
+        }
+        dest.resize(n);
+    }
+
+    static int batch_size(const cuda_vector&) { return 1; }
+
     static cuda_vector add(const cuda_vector& a, const cuda_vector& b) {
         int n = a.rows();
         cuda_vector result;
