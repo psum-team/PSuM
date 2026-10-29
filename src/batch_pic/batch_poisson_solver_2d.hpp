@@ -79,7 +79,7 @@ namespace batch_pic {
                 }
             }
             mrhs_ = batch_field_solver::mrhs_solver_backend(mrhs_backend_name_.c_str());
-            mrhs_.set_options(((options_.empty() ? std::string("batch_size=") : options_ + ";batch_size=") +
+            mrhs_.set_options(((options_.empty() ? std::string("batch_size ") : options_ + " batch_size ") +
                                std::to_string(batch_size_)).c_str());
             mrhs_.set_matrix(static_cast<unsigned long long>(n_rows),
                              static_cast<unsigned long long>(n_cols),
@@ -103,7 +103,7 @@ namespace batch_pic {
 
         void set_options(const std::string& options) {
             if (batch_size_ > 0)
-                mrhs_.set_options((options + ";batch_size=" + std::to_string(batch_size_)).c_str());
+                mrhs_.set_options((options + " batch_size " + std::to_string(batch_size_)).c_str());
             else
                 options_ = options;
         }

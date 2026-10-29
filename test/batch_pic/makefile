@@ -29,5 +29,10 @@ test_cuda_sparselu_mrhs: test_batch_poisson_solver_2d.cpp
 	./test_cuda_sparselu_mrhs cuda_sparselu_gpu cuda_sparselu_mrhs_gpu
 	rm -f test_cuda_sparselu_mrhs
 
+test_batch_poisson_solver_3d: test_batch_poisson_solver_3d.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_batch_poisson_solver_3d test_batch_poisson_solver_3d.cpp $(USE_BACKENDS) $(USE_BATCH_BACKENDS) $(LIBS) $(LDFLAGS)
+	./test_batch_poisson_solver_3d
+	rm -f test_batch_poisson_solver_3d
+
 clean:
 	rm -f test_batch_field_consistency test_host_batch_field_consistency test_cuda_sparselu_mrhs test_batch_poisson_solver_2d test_batch_poisson_solver_1d

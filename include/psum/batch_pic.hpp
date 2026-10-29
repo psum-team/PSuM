@@ -7,5 +7,6 @@
 #include "../../src/batch_pic/batch_field_copy.hpp"
 #include "../../src/batch_pic/batch_poisson_solver_2d.hpp"
 #include "../../src/batch_pic/batch_poisson_solver_1d.hpp"
+#include "../../src/batch_pic/batch_poisson_solver_3d.hpp"
 
 #endif

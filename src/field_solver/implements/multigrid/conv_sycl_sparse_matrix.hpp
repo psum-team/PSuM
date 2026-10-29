@@ -118,9 +118,9 @@ public:
             });
         } else {
             queue_.submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(nnz, batch), [=](sycl::id<2> item) {
-                    unsigned long long i = item[0];
-                    int c = item[1];
+                h.parallel_for(sycl::range<1>(nnz * batch), [=](sycl::id<1> item) {
+                    unsigned long long i = item[0] / batch;
+                    int c = static_cast<int>(item[0] % batch);
                     sycl::atomic_ref<T, sycl::memory_order::relaxed,
                                      sycl::memory_scope::device,
                                      sycl::access::address_space::global_space>
@@ -487,8 +487,9 @@ private:
             });
         } else {
             queue_.submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(count, batch), [=](sycl::id<2> idx) {
-                    int i = idx[0], c = idx[1];
+                h.parallel_for(sycl::range<1>(count * batch), [=](sycl::id<1> idx) {
+                    int i = idx[0] / batch;
+                    int c = idx[0] % batch;
                     d_out[rows[i] * batch + c] = compact[i * batch + c];
                 });
             });
@@ -525,8 +526,9 @@ private:
             });
         } else {
             queue_.submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(total, batch), [=](sycl::id<2> idx) {
-                    int i = idx[0], b = idx[1];
+                h.parallel_for(sycl::range<1>(total * batch), [=](sycl::id<1> idx) {
+                    int i = idx[0] / batch;
+                    int b = idx[0] % batch;
                     int row = rows[i];
                     int anchor = anchor_mode ? anchors[i] : row;
                     int g = group_ids[i];

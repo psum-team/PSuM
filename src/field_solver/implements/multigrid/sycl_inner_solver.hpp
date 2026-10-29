@@ -103,13 +103,13 @@ struct sycl_inner_solver {
             });
         } else {
             q->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(n, batch), [=](sycl::id<2> idx) {
-                    int row = idx[0], c = idx[1];
+                h.parallel_for(sycl::range<1>(n * batch), [=](sycl::id<1> idx) {
+                    int row = idx[0] / batch, c = idx[0] % batch;
                     T sum = T(0);
                     for (int j = 0; j < stride; j++) {
                         sum += d_mat[row * stride + j] * d_b[j * batch + c];
                     }
-                    d_out[row * batch + c] = sum;
+                    d_out[idx[0]] = sum;
                 });
             });
         }

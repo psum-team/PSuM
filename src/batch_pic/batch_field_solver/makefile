@@ -6,6 +6,7 @@ BATCH_FIELD_SOLVER_BIN = $(PROJECT_ROOT)/src/batch_pic/batch_field_solver/bin
 .PHONY: all impls
 all:
 	$(MAKE) clean
+	$(MAKE) $(BATCH_FIELD_SOLVER_BIN)/registry.o
 	$(MAKE) $(BATCH_FIELD_SOLVER_BIN)/impls.o
 
 $(BATCH_FIELD_SOLVER_BIN)/registry.o: register/registry.cpp
@@ -15,6 +16,10 @@ $(BATCH_FIELD_SOLVER_BIN)/registry.o: register/registry.cpp
 $(BATCH_FIELD_SOLVER_BIN)/%.o: implements/%.cpp
 	mkdir -p bin
 	$(CXX) -O3 -std=c++20 -fopenmp -c $< -fPIC -o $@
+
+$(BATCH_FIELD_SOLVER_BIN)/sycl_%.o: implements/sycl_%.cpp
+	mkdir -p bin
+	$(ACPP) $(COMMON_FLAGS) -c $< -fPIC -o $@
 
 $(BATCH_FIELD_SOLVER_BIN)/%.o: implements/%.cu
 	mkdir -p bin

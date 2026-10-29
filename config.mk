@@ -28,6 +28,8 @@ USE_EIGEN_SCHURCOMPLEMENT_CPU ?= 1
 USE_SYCL_MULTIGRID_GPU ?= 1
 USE_SYCL_MULTIGRID32F_GPU ?= 1
 
+USE_BATCH_FIELD_SOLVER ?= 1
+
 # --------------------------------------------------------------------
 # Load Local User Configuration (may not exist) 尝试加载本地用户配置
 # --------------------------------------------------------------------
@@ -83,9 +85,15 @@ USE_BACKENDS = -Wl,--whole-archive $(FIELD_SOLVER_BIN)/registry.o $(FIELD_SOLVER
 # --------------------------------------------------------------------
 # batch_pic batch_field_solver backends 批处理场求解器后端
 # --------------------------------------------------------------------
-BATCH_FIELD_SOLVER_BIN = $(PROJECT_ROOT)/src/batch_pic/batch_field_solver/bin
-PSUM_BATCH_SOLVER_BACKENDS += $(BATCH_FIELD_SOLVER_BIN)/eigen_sparselu_mrhs_cpu.o
-ifeq ($(USE_CUDA), 1)
-    PSUM_BATCH_SOLVER_BACKENDS += $(BATCH_FIELD_SOLVER_BIN)/cuda_sparselu_mrhs_gpu.o
+
+ifeq ($(USE_BATCH_FIELD_SOLVER), 1)
+    BATCH_FIELD_SOLVER_BIN = $(PROJECT_ROOT)/src/batch_pic/batch_field_solver/bin
+    PSUM_BATCH_SOLVER_BACKENDS += $(BATCH_FIELD_SOLVER_BIN)/eigen_sparselu_mrhs_cpu.o
+    ifeq ($(USE_SYCL_MULTIGRID_GPU), 1)
+        PSUM_BATCH_SOLVER_BACKENDS += $(BATCH_FIELD_SOLVER_BIN)/sycl_multigrid_mrhs_gpu.o
+    endif
+    ifeq ($(USE_CUDA), 1)
+        PSUM_BATCH_SOLVER_BACKENDS += $(BATCH_FIELD_SOLVER_BIN)/cuda_sparselu_mrhs_gpu.o
+    endif
+    USE_BATCH_BACKENDS = -Wl,--whole-archive $(BATCH_FIELD_SOLVER_BIN)/registry.o $(BATCH_FIELD_SOLVER_BIN)/impls.o -Wl,--no-whole-archive
 endif
-USE_BATCH_BACKENDS = -Wl,--whole-archive $(BATCH_FIELD_SOLVER_BIN)/registry.o $(BATCH_FIELD_SOLVER_BIN)/impls.o -Wl,--no-whole-archive

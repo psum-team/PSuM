@@ -121,9 +121,8 @@ struct vector_traits<sycl_vector<T>> {
             const T* d_bigger = (a.batch_size() > b.batch_size()) ? d_a : d_b;
             const T* d_smaller = (a.batch_size() > b.batch_size()) ? d_b : d_a;
             sycl_vector<T>::default_queue_->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(n, nb), [=](sycl::id<2> idx) {
-                    int r = idx[0], c = idx[1];
-                    d_out[r * nb + c] = d_bigger[r * nb + c] + d_smaller[r];
+                h.parallel_for(sycl::range<1>((size_t)n * nb), [=](sycl::id<1> idx) {
+                    d_out[idx] = d_bigger[idx] + d_smaller[idx / nb];
                 });
             });
         } else {
@@ -149,16 +148,14 @@ struct vector_traits<sycl_vector<T>> {
             int nb = result.batch_size();
             if (a.batch_size() > b.batch_size()) {
                 sycl_vector<T>::default_queue_->submit([&](sycl::handler& h) {
-                    h.parallel_for(sycl::range<2>(n, nb), [=](sycl::id<2> idx) {
-                        int r = idx[0], c = idx[1];
-                        d_out[r * nb + c] = d_a[r * nb + c] - d_b[r];
+                    h.parallel_for(sycl::range<1>((size_t)n * nb), [=](sycl::id<1> idx) {
+                        d_out[idx] = d_a[idx] - d_b[idx / nb];
                     });
                 });
             } else {
                 sycl_vector<T>::default_queue_->submit([&](sycl::handler& h) {
-                    h.parallel_for(sycl::range<2>(n, nb), [=](sycl::id<2> idx) {
-                        int r = idx[0], c = idx[1];
-                        d_out[r * nb + c] = d_a[r] - d_b[r * nb + c];
+                    h.parallel_for(sycl::range<1>((size_t)n * nb), [=](sycl::id<1> idx) {
+                        d_out[idx] = d_a[idx / nb] - d_b[idx];
                     });
                 });
             }
@@ -186,9 +183,8 @@ struct vector_traits<sycl_vector<T>> {
             const T* d_smaller = (vec.batch_size() > arr.batch_size()) ? d_a : d_v;
             int nb = result.batch_size();
             sycl_vector<T>::default_queue_->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(n, nb), [=](sycl::id<2> idx) {
-                    int r = idx[0], c = idx[1];
-                    d_out[r * nb + c] = d_bigger[r * nb + c] * d_smaller[r];
+                h.parallel_for(sycl::range<1>((size_t)n * nb), [=](sycl::id<1> idx) {
+                    d_out[idx] = d_bigger[idx] * d_smaller[idx / nb];
                 });
             });
         } else {
@@ -230,9 +226,8 @@ struct vector_traits<sycl_vector<T>> {
             T* d_dst = dst.data();
             const T* d_src = src.data();
             sycl_vector<T>::default_queue_->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(n, db), [=](sycl::id<2> idx) {
-                    int r = idx[0], c = idx[1];
-                    d_dst[r * db + c] = d_src[r];
+                h.parallel_for(sycl::range<1>((size_t)n * db), [=](sycl::id<1> idx) {
+                    d_dst[idx] = d_src[idx / db];
                 });
             });
         } else {
@@ -256,9 +251,8 @@ struct vector_traits<sycl_vector<T>> {
         } else if (arr.batch_size() == 1) {
             // arr.batch_size() == 1 && vec.batch_size() > 1: broadcast
             sycl_vector<T>::default_queue_->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(n, nb), [=](sycl::id<2> idx) {
-                    int r = idx[0], c = idx[1];
-                    d_v[r * nb + c] *= d_a[r];
+                h.parallel_for(sycl::range<1>((size_t)n * nb), [=](sycl::id<1> idx) {
+                    d_v[idx] *= d_a[idx / nb];
                 });
             });
         } else {
@@ -282,9 +276,8 @@ struct vector_traits<sycl_vector<T>> {
             const T* d_bigger = (in.batch_size() > arr.batch_size()) ? d_in : d_a;
             const T* d_smaller = (in.batch_size() > arr.batch_size()) ? d_a : d_in;
             sycl_vector<T>::default_queue_->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<2>(n, nb), [=](sycl::id<2> idx) {
-                    int r = idx[0], c = idx[1];
-                    d_out[r * nb + c] = d_bigger[r * nb + c] * d_smaller[r];
+                h.parallel_for(sycl::range<1>((size_t)n * nb), [=](sycl::id<1> idx) {
+                    d_out[idx] = d_bigger[idx] * d_smaller[idx / nb];
                 });
             });
         } else {

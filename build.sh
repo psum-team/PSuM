@@ -14,6 +14,11 @@ echo "=== Testing field solver backends ==="
 cd "${SCRIPT_DIR}/test/field_solver"
 make test
 
+echo ""
+echo "=== Building field solver batch processing backends ==="
+cd "${SCRIPT_DIR}/src/batch_pic/batch_field_solver"
+make all
+
 if [ -z "${PSUM_SKIP_PYTHON:-}" ]; then
     # Keep an existing .pypsum_venv by default (it is reused, not wiped).
     # Set PSUM_FORCE_VENV=1 to rebuild it from scratch.

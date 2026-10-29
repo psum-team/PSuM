@@ -92,10 +92,10 @@ namespace batch_pic {
         q.submit([&](sycl::handler& h) {
             auto bacc = batch.get_access(h);
             Scalar* dst = out.data();
-            h.parallel_for(sycl::range<2>(n, C), [=](sycl::item<2> it) {
-                const size_t i = it.get_id(0);
-                const size_t c = it.get_id(1);
-                dst[i * C + c] = bacc[c](i);
+            h.parallel_for(sycl::range<1>(n * C), [=](sycl::id<1> it) {
+                const size_t i = it / C;
+                const size_t c = it % C;
+                dst[it] = bacc[c](i);
             });
         });
         q.wait();
@@ -114,10 +114,10 @@ namespace batch_pic {
         q.submit([&](sycl::handler& h) {
             auto bacc = batch.get_access(h);
             const Scalar* src = in.data();
-            h.parallel_for(sycl::range<2>(n, C), [=](sycl::item<2> it) {
-                const size_t i = it.get_id(0);
-                const size_t c = it.get_id(1);
-                bacc[c](i) = src[i * C + c];
+            h.parallel_for(sycl::range<1>(n * C), [=](sycl::id<1> it) {
+                const size_t i = it / C;
+                const size_t c = it % C;
+                bacc[c](i) = src[it];
             });
         });
         q.wait();
