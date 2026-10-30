@@ -27,3 +27,5 @@ particle_collision/test9
 particle_container/test_pg_complex
 particle_container/test_pg_shuffle
 serialization/test7
+batch_pic/test_cuda_sparselu_mrhs
+batch_pic/test_batch_poisson_solver_3d

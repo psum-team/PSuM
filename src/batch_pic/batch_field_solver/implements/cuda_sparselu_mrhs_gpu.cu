@@ -2,6 +2,7 @@
 #include "../../../timer.hpp"
 #include "cuda_sparse_lu_mrhs_common.cuh"
 #include <Eigen/Sparse>
+#include <sstream>
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <stdexcept>
@@ -119,24 +120,14 @@ void solve(psum_batch_field_solver_handle h, double* b, double* x) {
 void set_options(psum_batch_field_solver_handle h, const char* options) {
     CudaLUSolver* solver = static_cast<CudaLUSolver*>(h);
     if (options == nullptr) return;
-    std::string opt(options);
-    size_t pos = 0;
-    while (pos < opt.size()) {
-        size_t sep = opt.find_first_of(";,", pos);
-        std::string pair = opt.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
-        pos = (sep == std::string::npos) ? opt.size() : sep + 1;
-        size_t eq = pair.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = pair.substr(0, eq);
-        std::string value = pair.substr(eq + 1);
-        auto trim = [](std::string& v) {
-            while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
-            while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
-        };
-        trim(key);
-        trim(value);
+    std::istringstream iss(options);
+    std::string key;
+    while (iss >> key) {
         if (key == "batch_size") {
-            solver->resize_sources(std::max(1, std::stoi(value)));
+            int b = 0;
+            iss >> b;
+            solver->batch_size = std::max(1, b);
+            solver->resize_sources(solver->batch_size);
             solver->solver.set_batch_size(solver->batch_size);
         }
     }

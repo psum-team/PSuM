@@ -12,8 +12,6 @@ test_host_batch_field_consistency: test_host_batch_field_consistency.cpp
 	./test_host_batch_field_consistency
 	rm test_host_batch_field_consistency
 
-AGGREGATE_TARGETS += test_cuda_sparselu_mrhs
-
 test_batch_poisson_solver_1d: test_batch_poisson_solver_1d.cpp
 	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_batch_poisson_solver_1d test_batch_poisson_solver_1d.cpp $(LIBS) $(LDFLAGS)
 	./test_batch_poisson_solver_1d

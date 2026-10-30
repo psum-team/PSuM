@@ -1,3 +1,4 @@
+#include <sstream>
 #include "../../../field_solver/implements/umfpack_lu_decompose.hpp"
 #include "../register/interface.h"
 #include <Eigen/Sparse>
@@ -82,29 +83,17 @@ namespace eigen_sparselu_mrhs_cpu {
     void set_options(psum_batch_field_solver_handle h, const char* options) {
         EigenLUSolverMRHS* solver = static_cast<EigenLUSolverMRHS*>(h);
         if (options == nullptr) return;
-        std::string opt(options);
-        size_t pos = 0;
-        while (pos < opt.size()) {
-            size_t sep = opt.find_first_of(";,", pos);
-            std::string pair = opt.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
-            pos = (sep == std::string::npos) ? opt.size() : sep + 1;
-            size_t eq = pair.find('=');
-            if (eq == std::string::npos) continue;
-            std::string key = pair.substr(0, eq);
-            std::string value = pair.substr(eq + 1);
-            auto trim = [](std::string& v) {
-                while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
-                while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
-            };
-            trim(key);
-            trim(value);
+        std::istringstream iss(options);
+        std::string key;
+        while (iss >> key) {
             if (key == "batch_size") {
-                int b = std::max(1, std::stoi(value));
-                solver->batch_size = b;
-                solver->source_replace_idxs.resize(b);
-                solver->source_replace_values.resize(b);
-                solver->source_addback_idxs.resize(b);
-                solver->source_addback_values.resize(b);
+                int b = 0;
+                iss >> b;
+                solver->batch_size = std::max(1, b);
+                solver->source_replace_idxs.resize(solver->batch_size);
+                solver->source_replace_values.resize(solver->batch_size);
+                solver->source_addback_idxs.resize(solver->batch_size);
+                solver->source_addback_values.resize(solver->batch_size);
             }
         }
     }
