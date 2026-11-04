@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <type_traits>
+#include <concepts>
 #include "../field/host_field.hpp"
 #include <cstdio>
 
@@ -89,63 +90,63 @@ namespace batch_pic {
     concept host_batch_field_type = is_host_batch_field<std::remove_cvref_t<Batch>>::value;
 
     // interp/add_back for batch fields.
-    template <typename Position, typename Batch>
-    requires field::foundation::array_like<Position, Batch::Dimension> && host_batch_field_type<Batch>
+    template <typename Position, typename CaseId, typename Batch>
+    requires field::foundation::array_like<Position, Batch::Dimension> && std::integral<CaseId> && host_batch_field_type<Batch>
     decltype(auto) interp(
         const Position& pos,
-        size_t case_id,
+        CaseId case_id,
         const Batch& batch
     ) {
         return field::interp(pos, batch.getFields()[case_id]);
     }
 
-    template <typename Batch>
-    requires host_batch_field_type<Batch>
+    template <typename CaseId, typename Batch>
+    requires std::integral<CaseId> && host_batch_field_type<Batch>
     decltype(auto) interp(
         const double (&pos)[Batch::Dimension],
-        size_t case_id,
+        CaseId case_id,
         const Batch& batch
     ) {
         return field::interp(std::to_array(pos), batch.getFields()[case_id]);
     }
 
-    template <typename Position, typename Batch>
-    requires field::foundation::array_like<Position, Batch::Dimension> && host_batch_field_type<Batch>
+    template <typename Position, typename CaseId, typename Batch>
+    requires field::foundation::array_like<Position, Batch::Dimension> && std::integral<CaseId> && host_batch_field_type<Batch>
     decltype(auto) interp_diff(
         const Position& pos,
-        size_t case_id,
+        CaseId case_id,
         const Batch& batch
     ) {
         return field::interp_diff(pos, batch.getFields()[case_id]);
     }
 
-    template <typename Batch>
-    requires host_batch_field_type<Batch>
+    template <typename CaseId, typename Batch>
+    requires std::integral<CaseId> && host_batch_field_type<Batch>
     decltype(auto) interp_diff(
         const double (&pos)[Batch::Dimension],
-        size_t case_id,
+        CaseId case_id,
         const Batch& batch
     ) {
         return field::interp_diff(std::to_array(pos), batch.getFields()[case_id]);
     }
 
-    template <typename Position, typename Batch>
-    requires field::foundation::array_like<Position, Batch::Dimension> && host_batch_field_type<Batch>
+    template <typename Position, typename CaseId, typename Batch>
+    requires field::foundation::array_like<Position, Batch::Dimension> && std::integral<CaseId> && host_batch_field_type<Batch>
     decltype(auto) add_back(
         const Position& pos,
         const typename Batch::Value& w,
-        size_t case_id,
+        CaseId case_id,
         Batch& batch
     ) {
         return field::add_back(pos, w, batch.getFields()[case_id]);
     }
 
-    template <typename Batch>
-    requires host_batch_field_type<Batch>
+    template <typename CaseId, typename Batch>
+    requires std::integral<CaseId> && host_batch_field_type<Batch>
     decltype(auto) add_back(
         const double (&pos)[Batch::Dimension],
         const typename Batch::Value& w,
-        size_t case_id,
+        CaseId case_id,
         Batch& batch
     ) {
         return field::add_back(std::to_array(pos), w, batch.getFields()[case_id]);

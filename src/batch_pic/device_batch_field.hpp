@@ -4,6 +4,8 @@
 #include <vector>
 #include <stdexcept>
 #include <cstdio>
+#include <concepts>
+#include <type_traits>
 #include "../field/device_field.hpp"
 
 namespace psum {
@@ -148,66 +150,66 @@ namespace batch_pic {
         } && is_device_field_acc<typename BatchAcc::value_type>::value;
 
     // interp/add_back for batch fields.
-    template <typename Position, typename BatchAcc>
-    requires device_batch_acc<BatchAcc> &&
+    template <typename Position, typename CaseId, typename BatchAcc>
+    requires device_batch_acc<BatchAcc> && std::integral<CaseId> &&
              field::foundation::array_like<Position, BatchAcc::value_type::Dimension>
     decltype(auto) interp(
         const Position& pos,
-        size_t case_id,
+        CaseId case_id,
         const BatchAcc& batch_acc
     ) {
         return field::interp(pos, batch_acc[case_id]);
     }
 
-    template <typename BatchAcc>
-    requires device_batch_acc<BatchAcc>
+    template <typename CaseId, typename BatchAcc>
+    requires device_batch_acc<BatchAcc> && std::integral<CaseId>
     decltype(auto) interp(
         const double (&pos)[BatchAcc::value_type::Dimension],
-        size_t case_id,
+        CaseId case_id,
         const BatchAcc& batch_acc
     ) {
         return field::interp(std::to_array(pos), batch_acc[case_id]);
     }
 
-    template <typename Position, typename BatchAcc>
-    requires device_batch_acc<BatchAcc> &&
+    template <typename Position, typename CaseId, typename BatchAcc>
+    requires device_batch_acc<BatchAcc> && std::integral<CaseId> &&
              field::foundation::array_like<Position, BatchAcc::value_type::Dimension>
     decltype(auto) interp_diff(
         const Position& pos,
-        size_t case_id,
+        CaseId case_id,
         const BatchAcc& batch_acc
     ) {
         return field::interp_diff(pos, batch_acc[case_id]);
     }
 
-    template <typename BatchAcc>
-    requires device_batch_acc<BatchAcc>
+    template <typename CaseId, typename BatchAcc>
+    requires device_batch_acc<BatchAcc> && std::integral<CaseId>
     decltype(auto) interp_diff(
         const double (&pos)[BatchAcc::value_type::Dimension],
-        size_t case_id,
+        CaseId case_id,
         const BatchAcc& batch_acc
     ) {
         return field::interp_diff(std::to_array(pos), batch_acc[case_id]);
     }
 
-    template <typename Position, typename BatchAcc>
-    requires device_batch_acc<BatchAcc> &&
+    template <typename Position, typename CaseId, typename BatchAcc>
+    requires device_batch_acc<BatchAcc> && std::integral<CaseId> &&
              field::foundation::array_like<Position, BatchAcc::value_type::Dimension>
     decltype(auto) add_back(
         const Position& pos,
         const typename BatchAcc::value_type::Value& w,
-        size_t case_id,
+        CaseId case_id,
         const BatchAcc& batch_acc
     ) {
         return field::add_back(pos, w, batch_acc[case_id]);
     }
 
-    template <typename BatchAcc>
-    requires device_batch_acc<BatchAcc>
+    template <typename CaseId, typename BatchAcc>
+    requires device_batch_acc<BatchAcc> && std::integral<CaseId>
     decltype(auto) add_back(
         const double (&pos)[BatchAcc::value_type::Dimension],
         const typename BatchAcc::value_type::Value& w,
-        size_t case_id,
+        CaseId case_id,
         const BatchAcc& batch_acc
     ) {
         return field::add_back(std::to_array(pos), w, batch_acc[case_id]);

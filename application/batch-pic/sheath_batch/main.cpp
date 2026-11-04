@@ -2,12 +2,8 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
-#include <cstdlib>
-#include <thread>
-#include <algorithm>
 
 #include <psum/psum.hpp>
-#include <psum/batch_pic.hpp>
 
 using namespace psum::prelude;
 using namespace psum::batch_pic;
@@ -16,6 +12,33 @@ using property::position;
 using property::velocity;
 using property::case_id;
 using namespace std;
+
+struct CaseParam {
+    double dens;     // injected plasma density [m^-3]
+    double Te_ev;
+    double Ti_ev;
+    double phi_R;    // right (wall) Dirichlet potential [V]
+};
+
+std::vector<CaseParam> load_cases(const std::string& json_fname) {
+    json_loader jl;
+    if (!jl.load_json(json_fname))
+        throw std::runtime_error("json_loader reported type errors: " + json_fname);
+    std::vector<CaseParam> params;
+    const size_t n_cases = jl.in("cases").idxs().size();
+    for (int idx = 0; idx < n_cases; idx++) {
+        CaseParam p;
+        auto cc = jl.in("cases").at(idx);
+        cc.set("dens", p.dens);
+        cc.set("Te_ev", p.Te_ev);
+        cc.set("Ti_ev", p.Ti_ev);
+        cc.set("phi_R", p.phi_R);
+        params.push_back(p);
+    }
+    if (params.empty())
+        throw std::runtime_error("no cases found in " + json_fname + " (expected a non-empty 'cases' array)");
+    return params;
+}
 
 using Particle = tagged_struct<
     tag_bind<position, Eigen::Vector<double, 1>>,
@@ -28,59 +51,25 @@ using ParticleGroup = particle_group<Particle, pos_x_nan_is_invalid>;
 using BNf = batch_node_field1D<double>;
 using BHNf = batch_host_node_field1D<double>;
 
-struct CaseParam {
-    double dens;     // injected plasma density [m^-3]
-    double Te_ev;
-    double Ti_ev;
-    double phi_R;    // right (wall) Dirichlet potential [V]
-};
-
-// merged injection for ALL cases: host-side RNG build, then ONE device
-// insert per species covering every case
-void init_particles(ParticleGroup& ps, const std::vector<CaseParam>& params, double weight, double dt, double mass_ele, double mass_ar, grid1D& c_domain, bool ion) {
-    Tic("inj_build")
-    // per-case RNG streams, built in parallel; the streams do not need to
-    // match the serial order
-    std::vector<std::vector<Particle>> per_case(params.size());
-    unsigned nthreads = std::max(1u, std::min<unsigned>(params.size(), std::thread::hardware_concurrency()));
-    auto case_body = [&](size_t k) {
-        rander R(10007 * (int)k + (ion ? 1 : 2));
-        auto& inj_list = per_case[k];
-        inj_list.reserve(8);
-        double dens = params[k].dens;
-        double mass = ion ? mass_ar : mass_ele;
-        double T = (ion ? params[k].Ti_ev : params[k].Te_ev) * 11700;
-        double Num_to_deal = (dens * c_domain.del<0>() / weight);
-        while (true) {
-            auto v = psum::random::RandFunction3D::RandV_Maxwell(R, T, mass).x();
-            double x_ = c_domain.nodePosition({c_domain.numCells<0>()}).x() + c_domain.del<0>() * R();
-            if (v * dt + x_ < c_domain.nodePosition({c_domain.numCells<0>()}).x())
-            {
-                Particle p;
-                get<position>(p).x() = v * dt + x_;
-                get<velocity>(p).x() = v;
-                get<case_id>(p) = k;
-                inj_list.push_back(p);
-            }
-            Num_to_deal--;
-            if((R() < Num_to_deal)==false) break;
-        }
-    };
-    std::vector<std::thread> pool;
-    pool.reserve(nthreads);
-    for (unsigned t = 0; t < nthreads; t++)
-        pool.emplace_back([&](unsigned t) {
-            for (size_t k = t; k < params.size(); k += nthreads) case_body(k);
-        }, t);
-    for (auto& th : pool) th.join();
-    size_t total = 0;
-    for (auto& v : per_case) total += v.size();
+void init_particles(std::vector<Particle>& buffer, double dens, double weight, double dt, double mass,double T, grid1D& c_domain, int cid) {
+    rander R;
     std::vector<Particle> inj_list;
-    inj_list.reserve(total);
-    for (auto& v : per_case) inj_list.insert(inj_list.end(), v.begin(), v.end());
-    TocTic("inj_insert")
-    ps.insert(inj_list);
-    Toc
+    double Num_to_deal = (dens * c_domain.del<0>() / weight);
+    while (true) {
+        auto v = psum::random::RandFunction3D::RandV_Maxwell(R, T, mass).x();
+        double x_ = c_domain.nodePosition({c_domain.numCells<0>()}).x() + c_domain.del<0>() * R();
+        if (v * dt + x_ < c_domain.nodePosition({c_domain.numCells<0>()}).x())
+        {
+            Particle p;
+            get<position>(p).x() = v * dt + x_;
+            get<velocity>(p).x() = v;
+            get<case_id>(p) = cid;
+            inj_list.push_back(p);
+        }
+        Num_to_deal--;
+        if((R() < Num_to_deal)==false) break;
+    }
+    buffer.insert(buffer.end(), inj_list.begin(), inj_list.end());
 }
 
 void particle_count(ParticleGroup& particles, BNf& dens, double weight) {
@@ -107,26 +96,6 @@ void push_particles(ParticleGroup& particles, BNf& phi, double q_m, double dt, d
             }
         };
     });
-}
-
-std::vector<CaseParam> load_cases(const std::string& json_fname) {
-    json_loader jl;
-    if (!jl.load_json(json_fname))
-        throw std::runtime_error("json_loader reported type errors: " + json_fname);
-    std::vector<CaseParam> params;
-    const size_t n_cases = jl.in("cases").idxs().size();
-    for (int idx = 0; idx < n_cases; idx++) {
-        CaseParam p;
-        auto cc = jl.in("cases").at(idx);
-        cc.set("dens", p.dens);
-        cc.set("Te_ev", p.Te_ev);
-        cc.set("Ti_ev", p.Ti_ev);
-        cc.set("phi_R", p.phi_R);
-        params.push_back(p);
-    }
-    if (params.empty())
-        throw std::runtime_error("no cases found in " + json_fname + " (expected a non-empty 'cases' array)");
-    return params;
 }
 
 int main(int argc, char** argv) {
@@ -195,10 +164,16 @@ int main(int argc, char** argv) {
         TocTic("push")
         push_particles(ele, phi, -1.602e-19 / mass_ele, dt, length);
         push_particles(ion, phi, 1.602e-19 / mass_ar, dt, length);
-        Toc
+        TocTic("inject")
 
-        init_particles(ion, params, weight, dt, mass_ele, mass_ar, grid, true);
-        init_particles(ele, params, weight, dt, mass_ele, mass_ar, grid, false);
+        std::vector<Particle> ele_inj, ion_inj;
+        for (size_t c = 0; c < n_cases; c++) {
+            init_particles(ion_inj, params[c].dens, weight, dt, mass_ar, params[c].Ti_ev * 11700, grid, c);
+            init_particles(ele_inj, params[c].dens, weight, dt, mass_ele, params[c].Te_ev * 11700, grid, c);
+        }
+        ion.insert(ion_inj);
+        ele.insert(ele_inj);
+        Toc
 
         if (iter % 50 == 0) {
             Tic("compress")
