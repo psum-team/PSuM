@@ -7,6 +7,9 @@
 #include "container_sl.hpp"
 #include "simplify_type_name.hpp"
 #include <any>
+#include <memory>
+#include <optional>
+#include <sycl/sycl.hpp>
 
 namespace psum {
 
@@ -16,6 +19,7 @@ namespace serialization {
     private:
         std::filesystem::path file_path_;
         std::unique_ptr<serialization::mas_file> file_;
+        mutable std::optional<sycl::queue> q_;
         std::unordered_map<std::string, std::any> objects_;
         std::unordered_map<std::string, std::function<void(mas_file&)>> savers_;
 
@@ -48,9 +52,8 @@ namespace serialization {
         template <typename T>
         void assert_supported_type() const {
             static_assert(
-                std::is_default_constructible_v<T> &&
-                    (std::is_move_assignable_v<T> || std::is_copy_assignable_v<T>),
-                "Only default-constructible types can be managed by object_manager.");
+                std::is_default_constructible_v<T> || std::is_constructible_v<T, sycl::queue&>,
+                "Only default-constructible types or queue-constructible types can be managed by object_manager.");
         }
 
     public:
@@ -62,6 +65,11 @@ namespace serialization {
                     throw std::runtime_error("Failed to create object manager: " + std::string(e.what()));
                 }
             }
+        }
+
+        object_manager(const std::filesystem::path& file_path, const sycl::queue& q)
+            : object_manager(file_path) {
+            q_ = q;
         }
 
         ~object_manager() = default;
@@ -88,15 +96,18 @@ namespace serialization {
             auto it = objects_.find(key);
             if (it != objects_.end()) {
                 try {
-                    return std::any_cast<T&>(it->second);
+                    return *std::any_cast<std::shared_ptr<T>&>(it->second);
                 } catch (const std::bad_any_cast&) {
                     throw std::runtime_error("Type mismatch for object: " + name);
                 }
             } else {
+                typedef std::shared_ptr<T> Tp;
                 // create new object
-                T& obj_ref = create_new_object<T>(key);
+                Tp ptr_try_load = make_object<T>();
                 // try to load from file or create new object
-                try_load_from_file(key, obj_ref);
+                if (!try_load_from_file(key, *ptr_try_load))
+                    ptr_try_load = make_object<T>(); // create new object if loading fails
+                T& obj_ref = create_new_object<T>(key, ptr_try_load);
                 // for a newly created object, register a function to save it to file
                 register_saver<T>(key);
                 return obj_ref;
@@ -149,12 +160,12 @@ namespace serialization {
             if (!file_) {
                 return false;
             } else {
-                T tmp_obj{};
+                auto tmp_ptr = make_object<T>();
                 serialization::mas_file tmp_mas(file_path_);
                 try {
                     std::string prefix = type_name<T>();
                     std::string key = prefix + "[" + name + "]";
-                    serialization::load(tmp_mas, key, tmp_obj);
+                    load(tmp_mas, key, *tmp_ptr);
                     return true;
                 } catch (const std::exception&) {
                     return false;
@@ -164,12 +175,27 @@ namespace serialization {
 
     private:
         template<typename T>
-        T& create_new_object(const std::string& name) {
-            auto [it, inserted] = objects_.try_emplace(name, std::make_any<T>());
+        T& create_new_object(const std::string& name, std::shared_ptr<T> ptr) {
+            auto [it, inserted] = objects_.try_emplace(name, std::make_any<std::shared_ptr<T>>(ptr));
             if (!inserted) {
                 throw std::runtime_error("Failed to create object: " + name);
             }
-            return std::any_cast<T&>(it->second);
+            return *std::any_cast<std::shared_ptr<T>&>(it->second);
+        }    
+    
+        // construct T from nothing when possible, else from the manager's queue
+        template <typename T>
+        requires std::is_default_constructible_v<T>
+        std::shared_ptr<T> make_object() const {
+            return std::make_shared<T>();
+        }
+
+        template <typename T>
+        requires std::is_constructible_v<T, sycl::queue&> && (!std::is_default_constructible_v<T>)
+        std::shared_ptr<T> make_object() const {
+            if (!q_)
+                throw std::runtime_error("Error: type needs a queue but object_manager has none: " + type_name<T>());
+            return std::make_shared<T>(*q_);
         }
 
         template<typename T>
@@ -178,10 +204,9 @@ namespace serialization {
                 return false;
             }
             try {
-                serialization::load(*file_, name, obj_ref);
+                load(*file_, name, obj_ref);
                 return true;
             } catch (const std::exception&) {
-                obj_ref = T{}; // fallback to default-constructed object
                 return false;
             }
         }
@@ -189,10 +214,11 @@ namespace serialization {
         template<typename T>
         void register_saver(const std::string& name) {
             savers_[name] = [this, name](mas_file& file) {
+                using serialization::save;
                 try {
                     auto it = objects_.find(name);
                     if (it != objects_.end())
-                        serialization::save(file, name, std::any_cast<T&>(it->second));
+                        save(file, name, *std::any_cast<std::shared_ptr<T>&>(it->second));
                     else
                         throw std::runtime_error("Object missing: " + name);
                 } catch (const std::exception& e) {
