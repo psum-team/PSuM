@@ -97,6 +97,7 @@ namespace field {
         }
 
         void copy(const std::vector<Value>& host_vec) {
+            if (host_vec.size() != size()) throw std::runtime_error("Error: host_vec size is not equal to field size.");
             content = host_vec;
         }
 
@@ -109,10 +110,12 @@ namespace field {
 		}
 
         Scalar& operator()(size_t index_row, size_t index_col) {
+			static_assert(QuantitySize > 1, "QuantitySize must be greater than 1 for this operator.");
 			return content[index_row][index_col];
 		}
         
         const Scalar& operator()(size_t index_row, size_t index_col) const {
+			static_assert(QuantitySize > 1, "QuantitySize must be greater than 1 for this operator.");
 			return content[index_row][index_col];
 		}
 
