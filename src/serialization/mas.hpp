@@ -282,6 +282,8 @@ namespace serialization {
 						visit(
 							[&ifs, &info, this](auto& v) {
 								ifs.read((char*)v.get(), info.blockSize * sizeof(typename std::decay_t<decltype(v)>::element_type));
+								if (!ifs)
+									throw std::runtime_error("Error: incomplete MAS block: " + info.blockName);
 							}, 
 							ans.content
 						);

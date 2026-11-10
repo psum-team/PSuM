@@ -40,10 +40,12 @@ namespace field {
 		}
 
         Scalar& operator()(size_t index_row, size_t index_col) {
+            static_assert(QuantitySize > 1, "QuantitySize must be greater than 1 for this operator.");
 			return content_acc[index_row][index_col];
 		}
         
         Scalar& operator()(size_t index_row, size_t index_col) const {
+			static_assert(QuantitySize > 1, "QuantitySize must be greater than 1 for this operator.");
 			return content_acc[index_row][index_col];
 		}
 

@@ -150,7 +150,7 @@ namespace particle_boundary {
                     p1x, p1y, p1z, p2x, p2y, p2z,
                     lambda
                 )) {
-                    if (lambda < min_lambda) {
+                    if (min_idx < 0 || lambda < min_lambda) {
                         min_lambda = lambda;
                         min_idx = i;
                     }

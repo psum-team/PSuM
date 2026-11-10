@@ -361,6 +361,27 @@ namespace field {
             return std::make_pair(indices, coefs);
         }
     }
+
+}
+
+namespace serialization {
+
+    template <int Dim>
+    void save(mas_file& fp, const std::string& name, const field::simple_grid<Dim>& obj) {
+        save(fp, name + ".lower", std::vector<double>(obj.get_lower_bounds().begin(), obj.get_lower_bounds().end()));
+        save(fp, name + ".upper", std::vector<double>(obj.get_upper_bounds().begin(), obj.get_upper_bounds().end()));
+        save(fp, name + ".cells", std::vector<int>(obj.get_cell_num().begin(), obj.get_cell_num().end()));
+    }
+
+    template <int Dim>
+    void load(mas_file& fp, const std::string& name, field::simple_grid<Dim>& obj) {
+        std::vector<double> lower, upper;
+        std::vector<int> cells;
+        load(fp, name + ".lower", lower);
+        load(fp, name + ".upper", upper);
+        load(fp, name + ".cells", cells);
+        obj = field::simple_grid<Dim>(lower, upper, cells);
+    }
 }
 
 }
