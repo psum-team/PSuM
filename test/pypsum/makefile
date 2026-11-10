@@ -8,7 +8,7 @@ py_test: test_mas.py
 	rm *.mas
 
 py_interop: test_interop_cpp_py.cpp
-	. $(PYPSUM_VENV)/bin/activate && g++ -fopenmp -o test_interop test_interop_cpp_py.cpp -std=c++20 -O3 $(INCLUDES) && ./test_interop
+	. $(PYPSUM_VENV)/bin/activate && $(ACPP) $(COMMON_FLAGS) -o test_interop test_interop_cpp_py.cpp $(INCLUDES) $(LIBS) $(LDFLAGS) && ./test_interop
 	rm test_interop
 
 # Verify the installed package actually imports and exposes the extension.
