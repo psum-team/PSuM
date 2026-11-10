@@ -50,6 +50,8 @@ namespace field {
         }
 
     public:
+        simple_grid() : simple_grid(std::vector<double>(Dimension, 0.0), std::vector<double>(Dimension, 1.0), std::vector<int>(Dimension, 1)) {}
+
         simple_grid(const Eigen::Vector<double, Dim>& lower_point, const Eigen::Vector<double, Dim>& upper_point, const std::vector<int>& size) {
             generate_from_eigen(lower_point, upper_point, size);
         }
