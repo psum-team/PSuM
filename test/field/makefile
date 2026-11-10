@@ -27,6 +27,18 @@ test_higher_order_interpDiff: test_higher_order_interpDiff.cpp
 	./test_higher_order_interpDiff
 	rm test_higher_order_interpDiff
 
+test_addback_trajectory: test_addback_trajectory.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_addback_trajectory test_addback_trajectory.cpp $(LIBS) $(LDFLAGS)
+	./test_addback_trajectory
+	python3 plot_traj_gif.py
+	rm test_addback_trajectory
+
+test_higher_order_addback: test_higher_order_addback.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_higher_order_addback test_higher_order_addback.cpp $(LIBS) $(LDFLAGS)
+	./test_higher_order_addback
+	python3 plot_addback_png.py
+	rm test_higher_order_addback
+
 test_field_interp: test_field_interp.cpp
 	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_field_interp test_field_interp.cpp $(LIBS) $(LDFLAGS)
 	./test_field_interp
