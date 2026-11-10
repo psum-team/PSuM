@@ -151,6 +151,13 @@ namespace multi_patch {
         }
 
     public:
+        multi_patch_grid(const sycl::queue& q)
+            : multi_patch_grid(q,
+                  std::vector<double>(Dimension, 0.0),
+                  std::vector<double>(Dimension, 1.0),
+                  std::vector<int>(Dimension, 1),
+                  std::vector<int>(1, MinResolutionExponent)) {}
+
         multi_patch_grid(const sycl::queue& q,
             const std::vector<double>& lower_point,
             const std::vector<double>& upper_point,
@@ -407,6 +414,28 @@ namespace multi_patch {
 
 }
 
+}
+
+namespace serialization {
+
+    template <int Dim>
+    void save(mas_file& fp, const std::string& name, const field::multi_patch::multi_patch_grid<Dim>& obj) {
+        save(fp, name + ".lower", std::vector<double>(obj.get_lower_bounds().begin(), obj.get_lower_bounds().end()));
+        save(fp, name + ".upper", std::vector<double>(obj.get_upper_bounds().begin(), obj.get_upper_bounds().end()));
+        save(fp, name + ".coarse_cells", std::vector<int>(obj.get_patch_num().begin(), obj.get_patch_num().end()));
+        save(fp, name + ".resolution_exponents", obj.get_resolution_exponents());
+    }
+
+    template <int Dim>
+    void load(mas_file& fp, const std::string& name, field::multi_patch::multi_patch_grid<Dim>& obj) {
+        std::vector<double> lower, upper;
+        std::vector<int> coarse_cells, res;
+        load(fp, name + ".lower", lower);
+        load(fp, name + ".upper", upper);
+        load(fp, name + ".coarse_cells", coarse_cells);
+        load(fp, name + ".resolution_exponents", res);
+        obj = field::multi_patch::multi_patch_grid<Dim>(obj.getQueue(), lower, upper, coarse_cells, res);
+    }
 }
 
 }

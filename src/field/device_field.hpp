@@ -1,10 +1,23 @@
 #ifndef PSUM_FIELD_DEVICE_FIELD_HPP
 #define PSUM_FIELD_DEVICE_FIELD_HPP
 
+#include <optional>
 #include "simple_grid.hpp"
 #include "device_array.hpp"
 
 namespace psum {
+
+namespace field {
+    template <int _Dimension, var_loc _location, typename _Scalar, int _QuantitySize>
+    class device_field;
+}
+
+namespace serialization {
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void save(mas_file& fp, const std::string& name, const field::device_field<Dim, Loc, Scalar, QS>& obj);
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void load(mas_file& fp, const std::string& name, field::device_field<Dim, Loc, Scalar, QS>& obj);
+}
 
 namespace field {
 
@@ -73,30 +86,54 @@ namespace field {
 
     protected:
         device_array<Value> device_content;
-		Grid grid;
+		std::optional<Grid> grid;
         static constexpr auto Gele = map_vloc_to_gele(Location);
 
+        void require_grid() const {
+            if (!grid) throw std::runtime_error("Error: device_field has no grid.");
+        }
+
 	public:
+        device_field(const sycl::queue& q) : device_content(q, 1 << Dimension) {}
+
+        template <int Dim, var_loc Loc, typename Scalar, int QS>
+        friend void serialization::save(serialization::mas_file&, const std::string&, const device_field<Dim, Loc, Scalar, QS>&);
+        template <int Dim, var_loc Loc, typename Scalar, int QS>
+        friend void serialization::load(serialization::mas_file&, const std::string&, device_field<Dim, Loc, Scalar, QS>&);
+
         device_field(const sycl::queue& q, const Grid &_grid) : grid(_grid), device_content(q, _grid.contentSize(Location)) {
             setZero();
         }
         device_field(device_array<Value> &&_content, const Grid &_grid):
             grid(_grid), device_content(std::move(_content)) {
-            if (device_content.size() != grid.contentSize(Location))
+            if (device_content.size() != grid->contentSize(Location))
                 throw std::runtime_error("Error: device_content size is not equal to grid size.");
+        }
+        device_field(Self&& other) noexcept
+            : device_content(std::move(other.device_content)), grid(std::move(other.grid)) {
+            other.grid.reset();
+        }
+        Self& operator=(Self&& other) noexcept {
+            if (this != &other) {
+                device_content = std::move(other.device_content);
+                grid = std::move(other.grid);
+                other.grid.reset();
+            }
+            return *this;
         }
 
         decltype(auto) get_access(sycl::handler& h) {
-            return acc_type(device_content.get_access(h), grid);
+            return acc_type(device_content.get_access(h), getGrid());
         }
 
-        size_t size() const { return grid.contentSize(Location); }
-        Value* data() { return device_content.data(); }
-        const Value* data() const { return device_content.data(); }
-		const Grid& getGrid() const { return grid; }
+        bool has_grid() const { return grid.has_value(); }
+        size_t size() const { require_grid(); return grid->contentSize(Location); }
+        Value* data() { require_grid(); return device_content.data(); }
+        const Value* data() const { require_grid(); return device_content.data(); }
+		const Grid& getGrid() const { require_grid(); return *grid; }
 		var_loc getLocation() const { return Location; }
         sycl::queue getQueue() const { return device_content.get_queue(); }
-        auto& getContent() const { return device_content; }
+        auto& getContent() const { require_grid(); return device_content; }
 
         template <typename FuncType>
         requires handler_to_field_value_func<FuncType, Value>
@@ -126,6 +163,7 @@ namespace field {
         }
 
 		void setConstant(const Value& value) {
+            require_grid();
             device_content.for_each([value](sycl::handler &h) {
                 return [value](Value& v) {
                     v = value;
@@ -134,6 +172,7 @@ namespace field {
 		}
 
         void setZero() {
+            require_grid();
             device_content.for_each([](sycl::handler &h) {
                 return [](Value& v) {
                     if constexpr (QuantitySize == 1) {
@@ -148,13 +187,16 @@ namespace field {
         }
 
         Self& operator<<(const Self& b) {
-            if (getQueue() == b.getQueue() && size() == b.size()) {
-                device_content.get_queue().memcpy(device_content.data(), b.data(), device_content.size() * sizeof(Value)).wait();
-            }
+            if (size() != b.size())
+                throw std::runtime_error("Error: operator<< requires fields of the same size.");
+            if (getQueue() != b.getQueue())
+                throw std::runtime_error("Error: operator<< requires fields on the same queue.");
+            device_content.get_queue().memcpy(device_content.data(), b.data(), device_content.size() * sizeof(Value)).wait();
             return *this;
         }
 
         void copy(const std::vector<Value>& host_vec) {
+            require_grid();
             device_content.copy(host_vec);
         }
 
@@ -173,8 +215,8 @@ namespace field {
             }
             fp << "variables=" << (Dimension == 1 ? std::string("x,") : (Dimension == 2 ? std::string("x,y,") : std::string("x,y,z,"))) << varName;
             auto copied_content = device_content.to_host();
-            std::vector<Scalar> unfolded_content(grid.contentSize(Location) * QuantitySize);
-            for (int i = 0; i < grid.contentSize(Location); i++) {
+            std::vector<Scalar> unfolded_content(getGrid().contentSize(Location) * QuantitySize);
+            for (size_t i = 0; i < getGrid().contentSize(Location); i++) {
                 if constexpr (QuantitySize == 1) {
                     unfolded_content[i] = copied_content[i];
                 } else {
@@ -276,6 +318,36 @@ namespace field {
         const typename Acc::Value& w,
         const Acc& acc) {
         return add_back(std::to_array(pos), w, acc);
+    }
+}
+
+namespace serialization {
+
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void save(mas_file& fp, const std::string& name, const field::device_field<Dim, Loc, Scalar, QS>& obj) {
+        save(fp, name + ".location", (int)obj.getLocation());
+        save(fp, name + ".grid", obj.getGrid());
+        save(fp, name + ".content", obj.getContent());
+    }
+
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void load(mas_file& fp, const std::string& name, field::device_field<Dim, Loc, Scalar, QS>& obj) {
+        int loc = -1;
+        load(fp, name + ".location", loc);
+        if (loc != (int)obj.getLocation())
+            throw std::runtime_error(
+                "Error: block '" + name + "' has location " + 
+                std::to_string(loc) + " which cannot be loaded into a field of location " + 
+                std::to_string((int)obj.getLocation()) + "."
+            );
+        field::simple_grid<Dim> grid;
+        load(fp, name + ".grid", grid);
+        field::device_array<typename field::device_field<Dim, Loc, Scalar, QS>::Value> content(obj.device_content.get_queue(), 1);
+        load(fp, name + ".content", content);
+        if (content.size() != grid.contentSize(Loc))
+            throw std::runtime_error("Error: block '" + name + "' has a content size which does not match its grid.");
+        obj.grid = grid;
+        obj.device_content = std::move(content);
     }
 }
 

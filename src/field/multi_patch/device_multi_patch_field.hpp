@@ -1,10 +1,27 @@
 #ifndef PSUM_FIELD_MULTI_PATCH_DEVICE_MULTI_PATCH_FIELD_HPP
 #define PSUM_FIELD_MULTI_PATCH_DEVICE_MULTI_PATCH_FIELD_HPP
 
+#include <optional>
 #include "multi_patch_grid.hpp"
 #include "../device_array.hpp"
 
 namespace psum {
+
+namespace field {
+
+namespace multi_patch {
+    template <int _Dimension, var_loc _location, typename _Scalar, int _QuantitySize>
+    class device_multi_patch_field;
+}
+
+}
+
+namespace serialization {
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void save(mas_file& fp, const std::string& name, const field::multi_patch::device_multi_patch_field<Dim, Loc, Scalar, QS>& obj);
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void load(mas_file& fp, const std::string& name, field::multi_patch::device_multi_patch_field<Dim, Loc, Scalar, QS>& obj);
+}
 
 namespace field {
 
@@ -79,9 +96,13 @@ namespace multi_patch {
 
     protected:
         device_array<Value> device_content;
-        Grid grid_;
+        std::optional<Grid> grid_;
         device_array<Position> positions_;
         static constexpr auto Gele = map_vloc_to_gele(Location);
+
+        void require_grid() const {
+            if (!grid_) throw std::runtime_error("Error: device_multi_patch_field has no grid.");
+        }
 
         static std::vector<Position> build_positions(const Grid& g) {
             size_t total = g.contentSize(Location);
@@ -104,47 +125,73 @@ namespace multi_patch {
 
         static void check_device(const sycl::queue& q, const Grid& grid) {
             if (q.get_device() != grid.getQueue().get_device())
-                throw std::runtime_error("device_multi_patch_field: queue and grid must be on the same device");
+                throw std::runtime_error("Error: device_multi_patch_field: queue and grid must be on the same device.");
         }
 
     public:
+        device_multi_patch_field(const sycl::queue& q)
+            : device_content(q, 1 << Dimension), positions_(q, 1) {}
+
+        template <int Dim, var_loc Loc, typename Scalar, int QS>
+        friend void serialization::save(serialization::mas_file&, const std::string&, const device_multi_patch_field<Dim, Loc, Scalar, QS>&);
+        template <int Dim, var_loc Loc, typename Scalar, int QS>
+        friend void serialization::load(serialization::mas_file&, const std::string&, device_multi_patch_field<Dim, Loc, Scalar, QS>&);
+
         device_multi_patch_field(Grid&& _grid)
             : device_multi_patch_field(_grid.getQueue(), std::move(_grid)) {}
 
         device_multi_patch_field(const sycl::queue& q, Grid&& _grid)
             : grid_(std::move(_grid)),
               device_content(q, _grid.contentSize(Location)),
-              positions_(q, build_positions(_grid))
+              positions_(q, build_positions(*grid_))
         {
-            check_device(q, grid_);
+            check_device(q, *grid_);
             setZero();
         }
 
         device_multi_patch_field(device_array<Value>&& _content, Grid&& _grid)
             : grid_(std::move(_grid)),
               device_content(std::move(_content)),
-              positions_(_grid.getQueue(), build_positions(_grid))
+              positions_(device_content.get_queue(), build_positions(*grid_))
         {
-            check_device(device_content.get_queue(), grid_);
-            if (device_content.size() != grid_.contentSize(Location))
+            check_device(device_content.get_queue(), *grid_);
+            if (device_content.size() != grid_->contentSize(Location))
                 throw std::runtime_error("Error: device_content size is not equal to grid size.");
+        }
+
+        device_multi_patch_field(Self&& other) noexcept
+            : device_content(std::move(other.device_content)),
+              grid_(std::move(other.grid_)),
+              positions_(std::move(other.positions_)) {
+            other.grid_.reset();
+        }
+
+        Self& operator=(Self&& other) noexcept {
+            if (this != &other) {
+                device_content = std::move(other.device_content);
+                grid_ = std::move(other.grid_);
+                positions_ = std::move(other.positions_);
+                other.grid_.reset();
+            }
+            return *this;
         }
 
         decltype(auto) get_access(sycl::handler& h) {
             return acc_type(
                 device_content.get_access(h),
                 positions_.get_access(h),
-                grid_.get_access(h)
+                getGrid().get_access(h)
             );
         }
 
-        size_t size() const { return grid_.contentSize(Location); }
-        Value* data() { return device_content.data(); }
-        const Value* data() const { return device_content.data(); }
-        const Grid& getGrid() const { return grid_; }
+        bool has_grid() const { return grid_.has_value(); }
+        size_t size() const { require_grid(); return grid_->contentSize(Location); }
+        Value* data() { require_grid(); return device_content.data(); }
+        const Value* data() const { require_grid(); return device_content.data(); }
+        const Grid& getGrid() const { require_grid(); return *grid_; }
         var_loc getLocation() const { return Location; }
         sycl::queue getQueue() const { return device_content.get_queue(); }
-        auto& getContent() const { return device_content; }
+        auto& getContent() const { require_grid(); return device_content; }
 
         template <typename FuncType>
         requires handler_to_mpf_value_func<FuncType, Value>
@@ -173,6 +220,7 @@ namespace multi_patch {
         }
 
         void setConstant(const Value& value) {
+            require_grid();
             device_content.for_each([value](sycl::handler &h) {
                 return [value](Value& v) {
                     v = value;
@@ -181,6 +229,7 @@ namespace multi_patch {
         }
 
         void setZero() {
+            require_grid();
             device_content.for_each([](sycl::handler &h) {
                 return [](Value& v) {
                     if constexpr (QuantitySize == 1) {
@@ -195,13 +244,16 @@ namespace multi_patch {
         }
 
         Self& operator<<(const Self& b) {
-            if (getQueue() == b.getQueue() && size() == b.size()) {
-                device_content.get_queue().memcpy(device_content.data(), b.data(), device_content.size() * sizeof(Value)).wait();
-            }
+            if (size() != b.size())
+                throw std::runtime_error("Error: operator<< requires fields of the same size.");
+            if (getQueue() != b.getQueue())
+                throw std::runtime_error("Error: operator<< requires fields on the same queue.");
+            device_content.get_queue().memcpy(device_content.data(), b.data(), device_content.size() * sizeof(Value)).wait();
             return *this;
         }
 
         void copy(const std::vector<Value>& host_vec) {
+            require_grid();
             device_content.copy(host_vec);
         }
 
@@ -220,8 +272,8 @@ namespace multi_patch {
             }
             fp << "variables=" << (Dimension == 1 ? std::string("x,") : (Dimension == 2 ? std::string("x,y,") : std::string("x,y,z,"))) << varName;
             auto copied_content = device_content.to_host();
-            std::vector<Scalar> unfolded_content(grid_.contentSize(Location) * QuantitySize);
-            for (int i = 0; i < grid_.contentSize(Location); i++) {
+            std::vector<Scalar> unfolded_content(getGrid().contentSize(Location) * QuantitySize);
+            for (size_t i = 0; i < getGrid().contentSize(Location); i++) {
                 if constexpr (QuantitySize == 1) {
                     unfolded_content[i] = copied_content[i];
                 } else {
@@ -329,6 +381,40 @@ namespace multi_patch {
 
 }
 
+}
+
+namespace serialization {
+
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void save(mas_file& fp, const std::string& name, const field::multi_patch::device_multi_patch_field<Dim, Loc, Scalar, QS>& obj) {
+        save(fp, name + ".location", (int)obj.getLocation());
+        save(fp, name + ".grid", obj.getGrid());
+        save(fp, name + ".content", obj.getContent());
+    }
+
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void load(mas_file& fp, const std::string& name, field::multi_patch::device_multi_patch_field<Dim, Loc, Scalar, QS>& obj) {
+        using MPF = field::multi_patch::device_multi_patch_field<Dim, Loc, Scalar, QS>;
+        int loc = -1;
+        load(fp, name + ".location", loc);
+        if (loc != (int)obj.getLocation())
+            throw std::runtime_error(
+                "Error: block '" + name + "' has location " + std::to_string(loc) + 
+                " which cannot be loaded into a field of location " 
+                + std::to_string((int)obj.getLocation()) + "."
+            );
+        field::device_array<typename MPF::Value> content(obj.device_content.get_queue());
+        load(fp, name + ".content", content);
+        sycl::queue q = content.get_queue();
+        field::multi_patch::multi_patch_grid<Dim> grid(q);
+        load(fp, name + ".grid", grid);
+        if (content.size() != grid.contentSize(Loc))
+            throw std::runtime_error("Error: block '" + name + "' has a content size which does not match its grid.");
+        field::device_array<typename MPF::Position> new_positions(q, MPF::build_positions(grid));
+        obj.grid_ = std::move(grid);
+        obj.device_content = std::move(content);
+        obj.positions_ = std::move(new_positions);
+    }
 }
 
 }

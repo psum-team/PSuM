@@ -1,6 +1,7 @@
 #include <psum/tag.hpp>
 #include <psum/serialization.hpp>
 #include <psum/particle_container.hpp>
+#include <psum/field.hpp>
 #include <iostream>
 
 using namespace std;
@@ -45,6 +46,24 @@ int main() {
     auto& pgroup = mng.obj<pGroup>("pgroup");
     pgroup.insert(vector<Particle>{p1, p1});
 
+    auto& dfield = mng.obj<psum::field::cell_field1D<double>>("dfield");
+    dfield = psum::field::cell_field1D<double>(q, psum::field::grid1D({0.0}, {1.0}, {16}));
+    dfield.for_each([](sycl::handler& h) {
+        return [](size_t i, double& v) { v = 0.125 * i; };
+    });
+
+    auto& darr = mng.obj<psum::field::device_array<double>>("darr");
+    vector<double> arr_src(123, 0.0);
+    arr_src.front() = 1.5; arr_src.back() = -7.25;
+    darr = psum::field::device_array<double>(q, arr_src);
+
+    auto& grid_out = mng.obj<psum::field::grid1D>("grid1");
+    grid_out = psum::field::grid1D({0.0}, {1.0}, {16});
+
+    using MPG = psum::field::multi_patch::multi_patch_grid<2>;
+    auto& mpg_out = mng.obj<MPG>("mpg1");
+    mpg_out = MPG(q, {0.0, 0.0}, {1.0, 1.0}, {2, 2}, {2, 2, 3, 2});
+
     mas_file file("tmp_saved.mas", mas_file::replaceMode);
     mng.save(file);
 
@@ -64,6 +83,35 @@ int main() {
     auto loaded_particles_host = loaded_particles.to_host();
     if (mng2.obj<pGroup>("pgroup").size() == 2 && check_same(loaded_particles_host[0], p1) && check_same(loaded_particles_host[1], p1)) cout << "S/L pgroup: pass\n"; else cout << "S/L pgroup: fail\n";
 
+    auto& loaded_dfield = mng2.obj<psum::field::cell_field1D<double>>("dfield");
+    auto loaded_dfield_host = loaded_dfield.getContent().to_host();
+    bool dfield_ok = loaded_dfield.has_grid() && loaded_dfield.size() == 16;
+    for (size_t i = 0; dfield_ok && i < loaded_dfield.size(); i++)
+        dfield_ok = dfield_ok && (loaded_dfield_host[i] == 0.125 * i);
+    if (dfield_ok) cout << "S/L dfield: pass\n"; else cout << "S/L dfield: fail\n";
+
+    auto& loaded_grid = mng2.obj<psum::field::grid1D>("grid1");
+    if (loaded_grid.get_cell_num() == std::array<int, 1>{16} && 
+        loaded_grid.get_lower_bounds() == std::array<double, 1>{0.0} && 
+        loaded_grid.get_upper_bounds() == std::array<double, 1>{1.0}
+    ) 
+        cout << "S/L grid1: pass\n"; else cout << "S/L grid1: fail\n";
+
+    auto& loaded_mpg = mng2.obj<MPG>("mpg1");
+    {
+        auto lp = loaded_mpg.get_patch_num();
+        auto rp = loaded_mpg.get_resolution_exponents();
+        bool mpg_ok = loaded_mpg.get_lower_bounds() == std::array<double, 2>{0.0, 0.0}
+            && loaded_mpg.get_upper_bounds() == std::array<double, 2>{1.0, 1.0}
+            && lp == std::array<int, 2>{2, 2}
+            && rp == std::vector<int>{2, 2, 3, 2};
+        if (mpg_ok) cout << "S/L mpg1: pass\n"; else cout << "S/L mpg1: fail\n";
+    }
+
+    auto& loaded_darr = mng2.obj<psum::field::device_array<double>>("darr");
+    auto loaded_darr_host = loaded_darr.to_host();
+    if (loaded_darr_host == arr_src) cout << "S/L darr: pass\n"; else cout << "S/L darr: fail\n";
+
     object_manager mng_noq("tmp_saved.mas");
     bool noq_pass = false;
     try {
@@ -71,6 +119,18 @@ int main() {
         (void)bad;
     } catch (const std::runtime_error& e) {
         noq_pass = string(e.what()).find("queue") != string::npos;
+        try {
+            auto& bad2 = mng_noq.obj<MPG>("mpg1");
+            (void)bad2;
+        } catch (const std::runtime_error& e2) {
+            noq_pass = noq_pass && string(e2.what()).find("queue") != string::npos;
+        }
+        try {
+            auto& bad3 = mng_noq.obj<psum::field::cell_field1D<double>>("dfield");
+            (void)bad3;
+        } catch (const std::runtime_error& e3) {
+            noq_pass = noq_pass && string(e3.what()).find("queue") != string::npos;
+        }
     }
     if (noq_pass) cout << "queue-less manager rejection: pass\n"; else cout << "queue-less manager rejection: fail\n";
 

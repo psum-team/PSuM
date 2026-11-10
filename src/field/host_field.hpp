@@ -1,10 +1,23 @@
 #ifndef PSUM_FIELD_HOST_FIELD_HPP
 #define PSUM_FIELD_HOST_FIELD_HPP
 
+#include <optional>
 #include "simple_grid.hpp"
 #include "atomic_add.hpp"
 
 namespace psum {
+
+namespace field {
+    template <int _Dimension, var_loc _location, typename _Scalar, int _QuantitySize>
+    class host_field;
+}
+
+namespace serialization {
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void save(mas_file& fp, const std::string& name, const field::host_field<Dim, Loc, Scalar, QS>& obj);
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void load(mas_file& fp, const std::string& name, field::host_field<Dim, Loc, Scalar, QS>& obj);
+}
 
 namespace field {
 
@@ -34,25 +47,49 @@ namespace field {
 
     protected:
         std::vector<Value> content;
-		Grid grid;
+		std::optional<Grid> grid;
         static constexpr auto Gele = map_vloc_to_gele(Location);
 
+        void require_grid() const {
+            if (!grid) throw std::runtime_error("Error: host_field has no grid.");
+        }
+
 	public:
+        host_field() = default;
+
+        template <int Dim, var_loc Loc, typename Scalar, int QS>
+        friend void serialization::save(serialization::mas_file&, const std::string&, const host_field<Dim, Loc, Scalar, QS>&);
+        template <int Dim, var_loc Loc, typename Scalar, int QS>
+        friend void serialization::load(serialization::mas_file&, const std::string&, host_field<Dim, Loc, Scalar, QS>&);
+
         host_field(const Grid &_grid) : grid(_grid), content(_grid.contentSize(Location), Value{}) {
             setZero();
         }
         host_field(std::vector<Value> &&_content, const Grid &_grid):
             grid(_grid), content(std::move(_content)) {
-            if (content.size() != grid.contentSize(Location))
+            if (content.size() != grid->contentSize(Location))
                 throw std::runtime_error("Error: content size is not equal to grid size.");
         }
+        host_field(Self&& other) noexcept
+            : content(std::move(other.content)), grid(std::move(other.grid)) {
+            other.grid.reset();
+        }
+        Self& operator=(Self&& other) noexcept {
+            if (this != &other) {
+                content = std::move(other.content);
+                grid = std::move(other.grid);
+                other.grid.reset();
+            }
+            return *this;
+        }
 
-        size_t size() const { return grid.contentSize(Location); }
-        Value* data() { return content.data(); }
-        const Value* data() const { return content.data(); }
-		const Grid& getGrid() const { return grid; }
+        bool has_grid() const { return grid.has_value(); }
+        size_t size() const { require_grid(); return grid->contentSize(Location); }
+        Value* data() { require_grid(); return content.data(); }
+        const Value* data() const { require_grid(); return content.data(); }
+		const Grid& getGrid() const { require_grid(); return *grid; }
 		var_loc getLocation() const { return Location; }
-        auto getContent() const { return content; }
+        auto getContent() const { require_grid(); return content; }
 
         template <typename FuncType>
         requires lambda_on_field_value<FuncType, Value>
@@ -73,11 +110,13 @@ namespace field {
         }
 
 		void setConstant(const Value& value) {
+            require_grid();
             for (auto& v : content)
                 v = value;
 		}
 
         void setZero() {
+            require_grid();
             for (auto& v : content) {
                 if constexpr (QuantitySize == 1) {
                     v = 0;
@@ -90,9 +129,9 @@ namespace field {
         }
 
         Self& operator<<(const Self& b) {
-            if (size() == b.size()) {
-                std::copy(b.data(), b.data() + size(), data());
-            }
+            if (size() != b.size())
+                throw std::runtime_error("Error: operator<< requires fields of the same size.");
+            std::copy(b.data(), b.data() + size(), data());
             return *this;
         }
 
@@ -135,8 +174,8 @@ namespace field {
             }
             fp << "variables=" << (Dimension == 1 ? std::string("x,") : (Dimension == 2 ? std::string("x,y,") : std::string("x,y,z,"))) << varName;
             
-            std::vector<Scalar> unfolded_content(grid.contentSize(Location) * QuantitySize);
-            for (int i = 0; i < grid.contentSize(Location); i++) {
+            std::vector<Scalar> unfolded_content(getGrid().contentSize(Location) * QuantitySize);
+            for (size_t i = 0; i < getGrid().contentSize(Location); i++) {
                 if constexpr (QuantitySize == 1) {
                     unfolded_content[i] = content[i];
                 } else {
@@ -266,6 +305,36 @@ namespace field {
         return add_back(std::to_array(pos), w, f);
     }
 
+}
+
+namespace serialization {
+
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void save(mas_file& fp, const std::string& name, const field::host_field<Dim, Loc, Scalar, QS>& obj) {
+        save(fp, name + ".location", (int)obj.getLocation());
+        save(fp, name + ".grid", obj.getGrid());
+        save(fp, name + ".content", obj.getContent());
+    }
+
+    template <int Dim, field::var_loc Loc, typename Scalar, int QS>
+    void load(mas_file& fp, const std::string& name, field::host_field<Dim, Loc, Scalar, QS>& obj) {
+        int loc = -1;
+        load(fp, name + ".location", loc);
+        if (loc != (int)obj.getLocation())
+            throw std::runtime_error(
+                "Error: block '" + name + "' has location " + 
+                std::to_string(loc) + " which cannot be loaded into a field of location " + 
+                std::to_string((int)obj.getLocation()) + "."
+            );
+        field::simple_grid<Dim> grid;
+        load(fp, name + ".grid", grid);
+        std::vector<typename field::host_field<Dim, Loc, Scalar, QS>::Value> content;
+        load(fp, name + ".content", content);
+        if (content.size() != grid.contentSize(Loc))
+            throw std::runtime_error("Error: block '" + name + "' has a content size which does not match its grid.");
+        obj.grid = grid;
+        obj.content = std::move(content);
+    }
 }
 
 }
