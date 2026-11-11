@@ -2,7 +2,6 @@
 #define PSUM_FIELD_SOLVER_IMPLEMENTS_MULTIGRID_CONV_SPARSE_MATRIX_HPP
 
 // This file provides ConvSparseMatrix for accelerated matrix-vector operations
-// File name: convSparseMatrix.hpp (lowercase 'c', 'S', 'M')
 
 #include <vector>
 #include <Eigen/SparseCore>
@@ -12,6 +11,7 @@
 #include <set>
 #include <stdexcept>
 #include <sstream>
+#include "../../../thread_parallel.hpp"
 #include "sparse_linear_trait.hpp"
 
 namespace psum {
@@ -207,29 +207,27 @@ struct ConvSparseMatrix {
             const std::vector<int>& rows = conv.second;
             if (!Anchor_at_max)
             {
-#pragma omp parallel for num_threads(thread_num)
-                for (int row : rows)
-                {
+                psum::thread_parallel::parallel_for(rows.size(), thread_num, [&](size_t tidx_) {
+                    const int row = rows[tidx_];
                     double v = 0;
                     for (auto p : coeff_and_index)
                     {
                         v += p.first * (in[p.second + row]);
                     }
                     ans[row] = v;
-                }
+                });
             }
             else
             {
-#pragma omp parallel for num_threads(thread_num)
-                for (int i = 0; i < rows.size(); i++)
-                {
+                psum::thread_parallel::parallel_for(rows.size(), thread_num, [&](size_t tidx_) {
+                    const int i = tidx_;
                     double v = 0;
                     for (auto p : coeff_and_index)
                     {
                         v += p.first * (in[p.second + convs_Anchor[conv_id][i]]);
                     }
                     ans[rows[i]] = v;
-                }
+                });
             }
         }
         return ans;
@@ -259,29 +257,27 @@ struct ConvSparseMatrix {
             const std::vector<int>& rows = conv.second;
             if (!Anchor_at_max)
             {
-#pragma omp parallel for num_threads(thread_num)
-                for (int row : rows)
-                {
+                psum::thread_parallel::parallel_for(rows.size(), thread_num, [&](size_t tidx_) {
+                    const int row = rows[tidx_];
                     double v = b[row] * b_coeff;
                     for (auto p : coeff_and_index)
                     {
                         v += p.first * (in[p.second + row]);
                     }
                     ans[row] = v * ans_coeff;
-                }
+                });
             }
             else
             {
-#pragma omp parallel for num_threads(thread_num)
-                for (int i = 0; i < rows.size(); i++)
-                {
+                psum::thread_parallel::parallel_for(rows.size(), thread_num, [&](size_t tidx_) {
+                    const int i = tidx_;
                     double v = b[rows[i]] * b_coeff;
                     for (auto p : coeff_and_index)
                     {
                         v += p.first * (in[p.second + convs_Anchor[conv_id][i]]);
                     }
                     ans[rows[i]] = v * ans_coeff;
-                }
+                });
             }
         }
         return ans;

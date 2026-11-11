@@ -12,6 +12,7 @@
 #include "../../src/random.hpp"
 #include "../../src/timer.hpp"
 #include "../../src/utils_sycl.hpp"
+#include "../../src/thread_parallel.hpp"
 
 namespace psum::prelude {
 

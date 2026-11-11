@@ -9,9 +9,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <vector>
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include "../../../thread_parallel.hpp"
 
 namespace psum {
 
@@ -27,15 +25,11 @@ enum class schur_contribution_backend {
 };
 
 inline int effective_thread_count(int requested) {
-#ifdef _OPENMP
     if (requested > 0) {
         return requested;
     }
-    return omp_get_max_threads();
-#else
-    (void)requested;
-    return 1;
-#endif
+    const unsigned h = std::thread::hardware_concurrency();
+    return h ? int(std::min(h, 16u)) : 1;
 }
 
 struct schur_complement_core {
@@ -84,28 +78,28 @@ struct schur_complement_core {
         }
 
         interface_map.resize(n_interface);
-#pragma omp parallel for if(n_interface > 1024) num_threads(thread_count)
-        for (int i = 0; i < n_interface; ++i) {
+        psum::thread_parallel::parallel_for(n_interface, thread_count, [&](size_t tidx_) {
+            const int i = static_cast<int>(tidx_);
             interface_map[i] = {sel[i], i};
-        }
+        });
 
         interior_map.resize(n_interior);
         std::vector<int> global_to_interior(n, -1);
         {
-#pragma omp parallel for if(n > 4096) num_threads(thread_count)
-            for (int g = 0; g < n; ++g) {
+            psum::thread_parallel::parallel_for(n, thread_count, [&](size_t tidx_) {
+                const int g = static_cast<int>(tidx_);
                 if (global_to_interface[g] < 0) {
                     global_to_interior[g] = g - static_cast<int>(std::upper_bound(sel.begin(), sel.end(), g) - sel.begin());
                 }
-            }
+            });
 
-#pragma omp parallel for if(n_interior > 1024) num_threads(thread_count)
-            for (int g = 0; g < n; ++g) {
+            psum::thread_parallel::parallel_for(n, thread_count, [&](size_t tidx_) {
+                const int g = static_cast<int>(tidx_);
                 if (global_to_interface[g] < 0) {
                     const int local = global_to_interior[g];
                     interior_map[local] = {g, local};
                 }
-            }
+            });
         }
 
         std::vector<Eigen::Triplet<double>> a_triplets, b_triplets, c_triplets, d_triplets;
@@ -145,36 +139,26 @@ struct schur_complement_core {
 
             std::vector<local_triplets> local(static_cast<std::size_t>(thread_count));
 
-#pragma omp parallel num_threads(thread_count)
-            {
-                const int tid =
-#ifdef _OPENMP
-                    omp_get_thread_num();
-#else
-                    0;
-#endif
+            psum::thread_parallel::parallel_for_tid(outer_size, thread_count, [&](unsigned tid, size_t col_) {
                 auto& out = local[static_cast<std::size_t>(tid)];
+                const int col = static_cast<int>(col_);
+                for (Eigen::SparseMatrix<double>::InnerIterator it(A_global, col); it; ++it) {
+                    const int row = it.row();
+                    const double val = it.value();
+                    const bool row_if = global_to_interface[row] >= 0;
+                    const bool col_if = global_to_interface[col] >= 0;
 
-#pragma omp for schedule(static)
-                for (int col = 0; col < outer_size; ++col) {
-                    for (Eigen::SparseMatrix<double>::InnerIterator it(A_global, col); it; ++it) {
-                        const int row = it.row();
-                        const double val = it.value();
-                        const bool row_if = global_to_interface[row] >= 0;
-                        const bool col_if = global_to_interface[col] >= 0;
-
-                        if (row_if && col_if) {
-                            out.d.emplace_back(global_to_interface[row], global_to_interface[col], val);
-                        } else if (!row_if && !col_if) {
-                            out.a.emplace_back(global_to_interior[row], global_to_interior[col], val);
-                        } else if (!row_if && col_if) {
-                            out.b.emplace_back(global_to_interior[row], global_to_interface[col], val);
-                        } else {
-                            out.c.emplace_back(global_to_interface[row], global_to_interior[col], val);
-                        }
+                    if (row_if && col_if) {
+                        out.d.emplace_back(global_to_interface[row], global_to_interface[col], val);
+                    } else if (!row_if && !col_if) {
+                        out.a.emplace_back(global_to_interior[row], global_to_interior[col], val);
+                    } else if (!row_if && col_if) {
+                        out.b.emplace_back(global_to_interior[row], global_to_interface[col], val);
+                    } else {
+                        out.c.emplace_back(global_to_interface[row], global_to_interior[col], val);
                     }
                 }
-            }
+            });
 
             auto total_size = [](const auto& parts, auto member) {
                 std::size_t total = 0;

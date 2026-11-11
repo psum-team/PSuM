@@ -1,10 +1,12 @@
 #include <psum/tag.hpp>
 #include "../../src/timer.hpp"
+#include "../../src/thread_parallel.hpp"
 #include <atomic>
 #include <Eigen/Core>
 #include <iostream>
 
 using namespace psum::tag;
+using namespace psum::thread_parallel;
 using namespace psum::tag::property;
 using namespace std;
 
@@ -42,12 +44,11 @@ Toc
 
     atomic_int counter_vec{}, counter_soa{};
 Tic("loop_vec")
-#pragma omp parallel for num_threads(6)
-    for(auto& i: ps_vec)
-    {
+    parallel_for(ps_vec.size(), 0, [&](size_t tidx_) {
+        auto& i = ps_vec[tidx_];
         if (get<position>(i).x()>1e6&&get<position>(i).x()<1.1e6)
             counter_vec++;
-    }
+    });
 Toc
 PrintTimer
     cout << counter_vec << "," << counter_soa << endl;

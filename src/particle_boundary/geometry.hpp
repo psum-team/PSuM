@@ -5,7 +5,7 @@
 #include <cmath>
 #include <vector>
 #include <algorithm>
-#include <omp.h>
+#include "../thread_parallel.hpp"
 
 namespace psum {
 
@@ -365,8 +365,8 @@ namespace geometry {
 
         udf.resize(I * J * K);
 
-#pragma omp parallel for
-        for (int ci = 0; ci < I; ++ci) {
+        psum::thread_parallel::parallel_for(I, 0, [&](size_t tidx_) {
+            const int ci = static_cast<int>(tidx_);
             for (int cj = 0; cj < J; ++cj) {
                 for (int ck = 0; ck < K; ++ck) {
                     int cell_idx = ci * J * K + cj * K + ck;
@@ -404,7 +404,7 @@ namespace geometry {
                     }
                 }
             }
-        }
+        });
 
         // increase udf value for the empty zones
         // like this:
@@ -417,8 +417,8 @@ namespace geometry {
         while (true) {
             bool updated = false;
 
-#pragma omp parallel for
-            for (int ci = 0; ci < I; ++ci) {
+            psum::thread_parallel::parallel_for(I, 0, [&](size_t tidx_) {
+                const int ci = static_cast<int>(tidx_);
                 for (int cj = 0; cj < J; ++cj) {
                     for (int ck = 0; ck < K; ++ck) {
                         int cell_idx = ci * J * K + cj * K + ck;
@@ -451,7 +451,7 @@ namespace geometry {
                         }
                     }
                 }
-            }
+            });
             std::swap(udf, new_udf);
             if (!updated) break;
             loop_count++;

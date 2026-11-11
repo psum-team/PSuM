@@ -16,8 +16,8 @@ USE_CUDA  ?= 1
 CUDA_ARCH ?= sm_75
 # umfpack is necessary for cuda_sparselu_gpu
 
-COMMON_FLAGS	= -O3 -std=c++20 -fopenmp=libgomp
-NVCCFLAGS 		= -O3 -std=c++20 -Xcompiler -fPIC -arch=$(CUDA_ARCH)
+COMMON_FLAGS	= -O3 -std=c++20 -pthread
+NVCCFLAGS 		= -O3 -std=c++20 -Xcompiler -pthread -Xcompiler -fPIC -arch=$(CUDA_ARCH)
 
 USE_CUDA_SPARSELU_GPU ?= 1
 USE_CUDA_SCHURCOMPLEMENT_GPU ?= 1

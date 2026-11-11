@@ -1,4 +1,5 @@
 #include "../register/interface.h"
+#include "../../thread_parallel.hpp"
 #include "schur_complement/block_sparse_reorder.hpp"
 #include "schur_complement/schur_complement_core.hpp"
 #include <Eigen/Sparse>
@@ -278,8 +279,8 @@ void build_block_lus(SolverContext* ctx) {
     ctx->blocks.resize(reorder.A_blocks.size());
     std::vector<int> failed(reorder.A_blocks.size(), 0);
 
-#pragma omp parallel for num_threads(ctx->num_threads > 0 ? ctx->num_threads : 1)
-    for (int bidx = 0; bidx < static_cast<int>(reorder.A_blocks.size()); ++bidx) {
+    psum::thread_parallel::parallel_for(reorder.A_blocks.size(), ctx->num_threads, [&](size_t tidx_) {
+        const int bidx = static_cast<int>(tidx_);
         auto& block = ctx->blocks[bidx];
         const int begin = reorder.block_offsets[bidx];
         const int end = reorder.block_offsets[bidx + 1];
@@ -296,7 +297,7 @@ void build_block_lus(SolverContext* ctx) {
         if (block.lu.info() != Eigen::Success) {
             failed[bidx] = 1;
         }
-    }
+    });
 
     for (int bidx = 0; bidx < static_cast<int>(failed.size()); ++bidx) {
         if (failed[bidx]) {
@@ -430,12 +431,12 @@ void solve(psum_field_solver_handle h, double* b, double* x) {
 
     Eigen::VectorXd y_full = Eigen::VectorXd::Zero(ctx->core.n_interior);
 
-#pragma omp parallel for num_threads(ctx->num_threads > 0 ? ctx->num_threads : 1)
-    for (int bidx = 0; bidx < static_cast<int>(ctx->blocks.size()); ++bidx) {
+    psum::thread_parallel::parallel_for(ctx->blocks.size(), ctx->num_threads, [&](size_t tidx_) {
+        const int bidx = static_cast<int>(tidx_);
         auto& block = ctx->blocks[bidx];
         const int ni = static_cast<int>(block.core_indices.size());
         if (!block.has_interior) {
-            continue;
+            return;
         }
 
         Eigen::VectorXd b_i(ni);
@@ -446,7 +447,7 @@ void solve(psum_field_solver_handle h, double* b, double* x) {
         for (int i = 0; i < ni; ++i) {
             y_full[block.core_indices[i]] = y[i];
         }
-    }
+    });
 
     if (interface_count > 0) {
         Eigen::VectorXd rhs_interface(interface_count);
@@ -460,12 +461,12 @@ void solve(psum_field_solver_handle h, double* b, double* x) {
 
     Eigen::VectorXd b_mod = f_I - ctx->core.mat_B * x_interface;
 
-#pragma omp parallel for num_threads(ctx->num_threads > 0 ? ctx->num_threads : 1)
-    for (int bidx = 0; bidx < static_cast<int>(ctx->blocks.size()); ++bidx) {
+    psum::thread_parallel::parallel_for(ctx->blocks.size(), ctx->num_threads, [&](size_t tidx_) {
+        const int bidx = static_cast<int>(tidx_);
         auto& block = ctx->blocks[bidx];
         const int ni = static_cast<int>(block.core_indices.size());
         if (!block.has_interior) {
-            continue;
+            return;
         }
 
         Eigen::VectorXd b_i(ni);
@@ -477,7 +478,7 @@ void solve(psum_field_solver_handle h, double* b, double* x) {
         for (int i = 0; i < ni; ++i) {
             x[ctx->core.interior_map[block.core_indices[i]].first] = x_i[i];
         }
-    }
+    });
 
     for (int i = 0; i < interface_count; ++i) {
         x[ctx->core.interface_map[i].first] = x_interface[i];

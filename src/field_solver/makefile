@@ -12,7 +12,7 @@ $(FIELD_SOLVER_BIN)/registry.o: register/registry.cpp
 
 $(FIELD_SOLVER_BIN)/%.o: implements/%.cpp
 	mkdir -p bin
-	$(CXX) -O3 -std=c++20 -fopenmp -c $< -fPIC -o $@
+	$(CXX) -O3 -std=c++20 -pthread -c $< -fPIC -o $@
 
 $(FIELD_SOLVER_BIN)/sycl_%.o: implements/sycl_%.cpp
 	mkdir -p bin
@@ -20,7 +20,7 @@ $(FIELD_SOLVER_BIN)/sycl_%.o: implements/sycl_%.cpp
 
 $(FIELD_SOLVER_BIN)/%.o: implements/%.cu
 	mkdir -p bin
-	$(NVCC) $(NVCCFLAGS) -Xcompiler -fopenmp -c $< -o $@
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 $(FIELD_SOLVER_BIN)/impls.o: $(PSUM_FIELD_SOLVER_BACKENDS)
 	$(CXX) -nostdlib -r $^ -o $@

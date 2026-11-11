@@ -5,6 +5,7 @@
 #include <iostream>
 #include <algorithm>
 #include <Eigen/SparseCore>
+#include "../thread_parallel.hpp"
 
 // la_obj: linear algebra object, including vector and sparse matrix
 
@@ -101,15 +102,15 @@ namespace mpi {
                 data_as_vec.push_back(operator[](i));
             }
 
-    #pragma omp parallel for
-            for (int i = 0; i < commor.num_process; i++)
+            psum::thread_parallel::parallel_for(commor.num_process, 0, [&](size_t tidx_) {
+                const int i = static_cast<int>(tidx_);
                 if (i != commor.my_id)
                     commor.send_buffer[i] = data_as_vec;
+            });
             commor.callMPI();
 
-    #pragma omp parallel for
-            for (int i = 0; i < commor.num_process; i++)
-            {
+            psum::thread_parallel::parallel_for(commor.num_process, 0, [&](size_t tidx_) {
+                const int i = static_cast<int>(tidx_);
                 if (i != commor.my_id)
                 {
                     for (std::size_t j = 0; j < ownership_table[i].size(); j++)
@@ -117,7 +118,7 @@ namespace mpi {
                         operator[](ownership_table[i][j]) = commor.receive_buffer[i][j];
                     }
                 }
-            }
+            });
         }
 
     };
@@ -200,9 +201,9 @@ namespace mpi {
                 if (i != commor.my_id)
                 {
                     commor.send_buffer[i].resize(sharelist_matrix[commor.my_id][i].size());
-    #pragma omp parallel for num_threads(thread_num)
-                    for (std::size_t j = 0; j < sharelist_matrix[commor.my_id][i].size(); j++)
-                        commor.send_buffer[i][j] = shared_array[sharelist_matrix[commor.my_id][i][j]];
+                    psum::thread_parallel::parallel_for(sharelist_matrix[commor.my_id][i].size(), thread_num, [&](size_t tidx_) {
+                        commor.send_buffer[i][tidx_] = shared_array[sharelist_matrix[commor.my_id][i][tidx_]];
+                    });
                 }
             }
             commor.callMPI();
@@ -212,11 +213,9 @@ namespace mpi {
                 if (i != commor.my_id)
                 {
                     auto &shareList = sharelist_matrix[i][commor.my_id];
-    #pragma omp parallel for num_threads(thread_num)
-                    for (std::size_t j = 0; j < shareList.size(); j++)
-                    {
-                        shared_array[shareList[j]] = commor.receive_buffer[i][j];
-                    }
+                    psum::thread_parallel::parallel_for(shareList.size(), thread_num, [&](size_t tidx_) {
+                        shared_array[shareList[tidx_]] = commor.receive_buffer[i][tidx_];
+                    });
                 }
             }
         }

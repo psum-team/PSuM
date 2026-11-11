@@ -43,12 +43,12 @@ test_hall_thruster: test_hall_thruster_case.cpp
 	rm test_hall_thruster
 
 test_mg_core: test_multigrid_core.cpp
-	g++ -std=c++20 -O3 -o test_mg_core test_multigrid_core.cpp -fopenmp -lstdc++ $(INCLUDES)
+	g++ -std=c++20 -O3 -o test_mg_core test_multigrid_core.cpp -pthread -lstdc++ $(INCLUDES)
 	./test_mg_core
 	rm test_mg_core
 
 test_conv_matvec: test_conv_sparse_matrix_matvec.cpp
-	g++ -std=c++20 -O3 -o test_conv_matvec test_conv_sparse_matrix_matvec.cpp -fopenmp -lstdc++ $(INCLUDES)
+	g++ -std=c++20 -O3 -o test_conv_matvec test_conv_sparse_matrix_matvec.cpp -pthread -lstdc++ $(INCLUDES)
 	./test_conv_matvec
 	rm test_conv_matvec
 
@@ -114,7 +114,7 @@ test_mpg_solver_compare: test_mpg_solver_compare.cpp
 AGGREGATE_TARGETS = test_multigrid
 
 test_schur_core: test_schur_complement_core.cpp
-	g++ -std=c++20 -O3 -o test_schur_core test_schur_complement_core.cpp -fopenmp -lstdc++ $(INCLUDES)
+	g++ -std=c++20 -O3 -o test_schur_core test_schur_complement_core.cpp -pthread -lstdc++ $(INCLUDES)
 	./test_schur_core
 	rm test_schur_core
 

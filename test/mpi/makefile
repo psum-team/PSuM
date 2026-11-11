@@ -1,7 +1,7 @@
 CC        = mpicc
 CXX       = mpicxx
 CFLAGS   ?= -O2 -Wall -Wextra -fPIC
-CXXFLAGS ?= -O2 -Wall -std=c++20 -fopenmp
+CXXFLAGS ?= -O2 -Wall -std=c++20 -pthread
 INCLUDES  = -I../../src/mpi
 MPIRUN   ?= mpirun -np 2
 
