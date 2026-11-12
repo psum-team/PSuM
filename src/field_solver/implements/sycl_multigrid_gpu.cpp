@@ -76,14 +76,8 @@ namespace sycl_multigrid_gpu {
 
         multigrid::sycl_vector<double>::default_queue_ = &ctx->queue;
 
-        std::vector<Eigen::SparseMatrix<double>> RMats;
-        if (ctx->K <= 1)
-            RMats = multigrid::get_restriction_matrices_2d(ctx->I, ctx->J, ctx->depth);
-        else
-            RMats = multigrid::get_restriction_matrices_3d(ctx->I, ctx->J, ctx->K, ctx->depth);
-
-        double c_coeff = ctx->K <= 1 ? 2.0 : 8.0;
-        ctx->core.setup(A, RMats, c_coeff);
+        auto transfers = multigrid::get_structured_transfers(ctx->I, ctx->J, ctx->K, ctx->depth);
+        ctx->core.setup(A, transfers.restriction, transfers.interpolation);
         ctx->core.set_relax_counts(ctx->pre_relax, ctx->post_relax);
 
         for (size_t i = 0; i < ctx->core.relax_mats_.size(); i++)

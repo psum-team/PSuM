@@ -36,7 +36,17 @@ struct multigrid_core {
         stay
     };
 
+    // Legacy interface for externally supplied transfer operators. Structured
+    // callers use the explicit R/P overload below, including boundary weights.
     inline void setup(const EigenSpMatrix& A, const std::vector<EigenSpMatrix>& RMats, double c_coeff)
+    {
+        std::vector<EigenSpMatrix> PMats;
+        for (const auto& R : RMats) PMats.emplace_back(R.transpose() * c_coeff);
+        setup(A, RMats, PMats);
+    }
+
+    inline void setup(const EigenSpMatrix& A, const std::vector<EigenSpMatrix>& RMats,
+                      const std::vector<EigenSpMatrix>& PMats)
     {
         std::vector<Eigen::ArrayXd> dmat_inv_tmp;
         std::vector<EigenSpMatrix> relax_mats_tmp;
@@ -80,7 +90,7 @@ struct multigrid_core {
         
         for (int i = 0; i < restrict_mats_tmp.size(); i++)
         {
-            interpolate_mats_tmp[i] = (restrict_mats_tmp[i].transpose() * c_coeff).eval();
+            interpolate_mats_tmp[i] = PMats[i];
         }
         
         for (int i = 1; i < a_mats_tmp.size(); i++)

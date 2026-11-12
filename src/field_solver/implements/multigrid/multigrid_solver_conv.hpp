@@ -25,7 +25,6 @@ struct MultiGridSolverConv {
     int max_cycles_ = 10;
     int pre_relax_ = 1;
     int post_relax_ = 1;
-    double c_coeff_ = 2.0;
     int num_conv_mask_ = 5;
     int num_conv_mask_relax_ = 5;
     int num_conv_mask_restrict_ = 5;
@@ -70,13 +69,8 @@ struct MultiGridSolverConv {
         if (!matrix_.rows())
             throw std::runtime_error("Matrix not set");
 
-        std::vector<Eigen::SparseMatrix<double>> RMats;
-        if (K <= 1) {
-            RMats = get_restriction_matrices_2d(I, J, depth);
-        } else {
-            RMats = get_restriction_matrices_3d(I, J, K, depth);
-        }
-        core_.setup(matrix_, RMats, c_coeff_);
+        auto transfers = get_structured_transfers(I, J, K, depth);
+        core_.setup(matrix_, transfers.restriction, transfers.interpolation);
         core_.relax_mats_[0].set(core_.relax_mats_[0].original_mat, num_conv_mask_relax_);
         for (size_t i = 0; i < core_.restrict_mats_.size(); i++)
         {
