@@ -144,6 +144,45 @@ namespace simple_interpolation {
         static constexpr auto value = &diff_cubic_bspline_1D;
     };
 
+    // quartic B-spline on a uniform grid. x in [-0.5, 0.5), 5-point support.
+    // Centered quartic basis B4 = B3 * chi (knots at half-integers), exact piecewise form:
+    //   |t| <= 0.5        : 115/192 - 5/8 t^2 + 1/4 t^4
+    //   0.5 < |t| <= 1.5  : 1/2 - F(|t|-0.5) - (1.5-|t|)^4/24,  F(v) = 2v/3 - v^3/3 + v^4/8
+    //   1.5 < |t| <= 2.5  : (2.5-|t|)^4/24
+    inline interp_coeffs<5> quartic_bspline_1D(double s) {
+        auto b4 = [](double t) {
+            double a = std::abs(t);
+            if (a <= 0.5) return 115.0 / 192.0 - a * a * (5.0 / 8.0) + a * a * a * a / 4.0;
+            if (a <= 1.5) {
+                double v = a - 0.5;
+                return 0.5 - (2.0 * v / 3.0 - v * v * v / 3.0 + v * v * v * v / 8.0) - std::pow(1.5 - a, 4) / 24.0;
+            }
+            if (a <= 2.5) return std::pow(2.5 - a, 4) / 24.0;
+            return 0.0;
+        };
+        return interp_coeffs<5>{b4(s + 2.0), b4(s + 1.0), b4(s), b4(s - 1.0), b4(s - 2.0)};
+    }
+
+    inline interp_coeffs<5> diff_quartic_bspline_1D(double s) {
+        auto d4 = [](double t) {   // B4', odd
+            double a = std::abs(t);
+            double sign = t < 0 ? -1.0 : 1.0;
+            if (a <= 0.5) return sign * (-a * 1.25 + a * a * a);
+            if (a <= 1.5) {
+                double v = a - 0.5;
+                return sign * (-(2.0 / 3.0 - v * v + v * v * v / 2.0) + std::pow(1.5 - a, 3) / 6.0);
+            }
+            if (a <= 2.5) return sign * (-std::pow(2.5 - a, 3) / 6.0);
+            return 0.0;
+        };
+        return interp_coeffs<5>{d4(s + 2.0), d4(s + 1.0), d4(s), d4(s - 1.0), d4(s - 2.0)};
+    }
+
+    template<>
+    struct diff_map<&quartic_bspline_1D> {
+        static constexpr auto value = &diff_quartic_bspline_1D;
+    };
+
 }
 
 }

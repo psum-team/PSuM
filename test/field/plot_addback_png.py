@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render the higher-order add_back comparison plt files into summary PNGs."""
 import re
+import sys
 
 import numpy as np
 import matplotlib
@@ -23,10 +24,31 @@ def load_frame(path):
     return pts[:, 2].reshape(nx, ny).T
 
 
+SUM_TOL = 5e-4   # plot files print ~6 significant digits
+failures = []
+
+
+def check(cond, msg):
+    print(("PASS " if cond else "FAIL ") + msg)
+    if not cond:
+        failures.append(msg)
+
+
 def render_group(prefix, stem_hi, stem_lo, ks, out):
     hi = load_frame(f"{prefix}_{stem_hi}.plt")
     lo = {k: load_frame(f"{prefix}_{stem_lo}_k{k}.plt") for k in ks}
     df = {k: load_frame(f"{prefix}_diff_k{k}.plt") for k in ks}
+
+    # quantitative checks (CI-valid): partition of unity, non-negativity,
+    # and strictly decreasing L2 of (hi - lo) as k grows
+    check(abs(hi.sum() - 1.0) < SUM_TOL, f"{prefix}: hi deposit sum={hi.sum():.6f}")
+    check(hi.min() >= 0.0, f"{prefix}: hi deposit non-negative (min={hi.min():.2e})")
+    l2s = []
+    for k in ks:
+        check(abs(lo[k].sum() - 1.0) < SUM_TOL, f"{prefix}: k={k} lo deposit sum={lo[k].sum():.6f}")
+        l2s.append(float(np.sqrt((df[k] ** 2).sum())))
+    check(l2s[0] > l2s[1] > l2s[2],
+          f"{prefix}: L2 diff strictly decreasing with k ({['%.2e' % v for v in l2s]})")
 
     vmax = max(hi.max(), max(v.max() for v in lo.values()))
 
@@ -57,5 +79,8 @@ def render_group(prefix, stem_hi, stem_lo, ks, out):
 
 if __name__ == "__main__":
     ks = [1, 8, 32]
-    render_group("addback", "2nd", "1st", ks, "addback_summary.png")
+    render_group("addback2", "2nd", "1st", ks, "addback2_summary.png")
     render_group("addback3", "3rd", "2nd", ks, "addback3_summary.png")
+    render_group("addback4", "4th", "3rd", ks, "addback4_summary.png")
+    print(f"plot_addback_png: {'ALL PASS' if not failures else str(len(failures)) + ' FAILURES'}")
+    sys.exit(1 if failures else 0)

@@ -88,7 +88,7 @@ namespace field {
         node_index cN(const VecDim& p) const {
             node_index result;
             for (int i = 0; i < Dim; i++)
-                result.indices[i] = int((p[i] - lower_bounds[i]) * delta_r[i]);
+                result.indices[i] = int(std::floor((p[i] - lower_bounds[i]) * delta_r[i]));
             return result;
         }
 
@@ -333,8 +333,8 @@ namespace field {
                 for (int j = 0; j < Dim; j++) {
                     int idx_in_dim = idx % SupportSize1D + Shift;
                     node.indices[Dim - 1 - j] += idx_in_dim;
-                    // high order stencils wrap periodically on boundary
-                    if constexpr (SupportSize1D > 2) {
+                    // stencils wrap periodically on boundary
+                    {
                         const int w = grid.get_cell_num()[Dim - 1 - j] + 1;
                         if (node.indices[Dim - 1 - j] < 0) node.indices[Dim - 1 - j] += w;
                         else if (node.indices[Dim - 1 - j] >= w) node.indices[Dim - 1 - j] -= w;
@@ -369,8 +369,8 @@ namespace field {
                 for (int j = 0; j < Dim; j++) {
                     int idx_in_dim = idx % SupportSize1D + Shift;
                     node.indices[Dim - 1 - j] += idx_in_dim;
-                    // high order stencils wrap periodically on boundary
-                    if constexpr (SupportSize1D > 2) {
+                    // stencils wrap periodically on boundary
+                    {
                         const int w = grid.get_cell_num()[Dim - 1 - j] + 1;
                         if (node.indices[Dim - 1 - j] < 0) node.indices[Dim - 1 - j] += w;
                         else if (node.indices[Dim - 1 - j] >= w) node.indices[Dim - 1 - j] -= w;
