@@ -25,6 +25,9 @@ using HNf = host_node_field1D<double>;
 using Pf = node_field2D<double>;
 using HPf = host_node_field2D<double>;
 
+// deposition/interpolation order: 1 = linear, 2 = quadratic B-spline, 3 = cubic B-spline
+constexpr int interp_order = 1;
+
 void init_particles(ParticleGroup& particles, double length, int num, double VT, double VD) {
     std::mt19937 gen(123456789);
     std::uniform_real_distribution<double> R(0, 1);
@@ -48,7 +51,7 @@ void particle_count(ParticleGroup& particles, Nf& dens, double weight) {
     particles.for_each([&](sycl::handler& h) {
         auto dens_acc = dens.get_access(h);
         return [=](const Particle& p) {
-            add_back(get<position>(p), weight, dens_acc);
+            add_back_B_spline<interp_order>(get<position>(p), weight, dens_acc);
         };
     });
 }
@@ -56,9 +59,9 @@ void particle_count(ParticleGroup& particles, Nf& dens, double weight) {
 void push_particles(ParticleGroup& particles, Nf& phi, double q_m, double dt) {
     particles.for_each([&](sycl::handler& h) {
         auto phi_acc = phi.get_access(h);
-        double length = phi.getGrid().span<0>();
+        double length = phi.getGrid().span<0>() + phi.getGrid().del<0>();
         return [=](Particle& p) {
-            auto [dPhi_dx] = interp_diff(get<position>(p), phi_acc);
+            auto [dPhi_dx] = interp_diff_B_spline<interp_order>(get<position>(p), phi_acc);
             double ex = -dPhi_dx;
 
             get<velocity>(p).x() += ex * q_m * dt;
@@ -88,7 +91,7 @@ int main() {
 
     sycl::queue q{sycl::default_selector()};
 
-    grid1D grid({0.0}, {length}, {cell_num});
+    grid1D grid({0.0 + dx / 2}, {length - dx / 2}, {cell_num - 1});
     grid2D phasespace_grid({0.0, -3 * VD}, {length, 3 * VD}, {300, 200});
     
     Nf dens(q, grid), phi(q, grid);
@@ -104,8 +107,7 @@ int main() {
         grid,
         {},
         {
-            Dirichlet_point(grid, boundary_direction_1d::L) = 0.0,
-            Dirichlet_point(grid, boundary_direction_1d::R) = 0.0
+            Dirichlet_point(grid, boundary_direction_1d::L) = 0.0
         },
         0.25 / M_PI
     );
@@ -114,7 +116,9 @@ int main() {
     fp1 << "variables=time,Venergy,Eenergy,TotalEnergy,relative_E_change" << endl;
     double E0 = 0;
 
-    for (int iter = 0; iter < 1000; iter++) {
+    const double t_end = 30.0;
+    int max_iter = int(t_end / dt + 0.5);
+    for (int iter = 0; iter < max_iter; iter++) {
         particle_count(electrons, dens, 1.0);
         dens_host.copy(dens.getContent().to_host());
         dens_host.for_each([&](size_t i, double &d) {
@@ -133,7 +137,7 @@ int main() {
         
         double Eenergy = 0;
         for (size_t i = 0; i < cell_num; i++) {
-            Eenergy += pow(phi_host(i) - phi_host(i + 1), 2) * 0.25 / M_PI / 2 / dx;
+            Eenergy += pow(phi_host(i) - phi_host((i + 1) % cell_num), 2) * 0.25 / M_PI / 2 / dx;
         }
 
         if (iter == 0) E0 = Venergy + Eenergy;
@@ -149,7 +153,7 @@ int main() {
                     auto pos = get<position>(p);
                     auto vel = get<velocity>(p);
                     Eigen::Vector<double, 2> pos_v{(pos.x()), (vel.x())};
-                    add_back(pos_v, 1.0, phasespace_acc);
+                    add_back_B_spline<interp_order>(pos_v, 1.0, phasespace_acc);
                 };
             });
             phasespace_host.copy(phasespace_field.getContent().to_host());

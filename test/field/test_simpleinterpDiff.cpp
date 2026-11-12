@@ -42,7 +42,7 @@ bool test_interp_diff() {
             Eigen::Vector<double, Dim> q = p;
             q[d] += ofs;
             // find another point in the same cell
-            while (g.c2i(g.nC(q)) != g.c2i(g.nC(p))) {
+            while (!g.inGrid(q) || g.c2i(g.nC(q)) != g.c2i(g.nC(p))) {
                 ofs = (R() - 0.5) * g.get_deltas()[d];
                 q[d] = p[d] + ofs;
             }

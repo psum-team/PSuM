@@ -197,7 +197,7 @@ bool test_interp_4() {
             Eigen::Vector<double, Dim> q = p;
             q[d] += ofs;
             // find another point in the same cell
-            while (g.c2i(g.nC(q)) != g.c2i(g.nC(p))) {
+            while (!g.inGrid(q) || g.c2i(g.nC(q)) != g.c2i(g.nC(p))) {
                 q[d] = p[d] + (R() - 0.5) * g.get_deltas()[d];
             }
             auto [indices_p, coefs_p] = linear_interp(g, p);
