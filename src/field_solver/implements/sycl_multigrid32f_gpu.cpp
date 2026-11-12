@@ -10,6 +10,7 @@
 #include <iostream>
 #include <sstream>
 #include <cstring>
+#include <algorithm>
 
 namespace psum {
 
@@ -29,12 +30,12 @@ namespace sycl_multigrid32f_gpu {
         int pre_relax = 2;
         int post_relax = 1;
         int max_cycles = 10;
+        int correction_interval = 4;
         int num_conv_mask = 5;
         int num_conv_mask_relax = 5;
         int num_conv_mask_restrict = 5;
         int num_conv_mask_interpolate = 5;
         int num_conv_mask_a = 5;
-        Eigen::SparseMatrix<double> matrix;
         std::vector<unsigned long long> source_replace_idxs;
         std::vector<double> source_replace_values;
         unsigned long long* d_source_replace_idxs = nullptr;
@@ -45,6 +46,7 @@ namespace sycl_multigrid32f_gpu {
         unsigned long long* d_source_addback_idxs = nullptr;
         double* d_source_addback_values = nullptr;
         unsigned long long source_addback_size = 0;
+        multigrid::ConvSyclSparseMatrix<double> residual_matrix;
         float* d_b = nullptr;
         float* d_x = nullptr;
     };
@@ -75,13 +77,15 @@ namespace sycl_multigrid32f_gpu {
         for (unsigned long long i = 0; i < nnz; ++i)
             triplets.emplace_back(rows[i], cols[i], vals[i]);
         A.setFromTriplets(triplets.begin(), triplets.end());
-        ctx->matrix = A;
 
         multigrid::sycl_vector<double>::default_queue_ = &ctx->queue;
         multigrid::sycl_vector<float>::default_queue_ = &ctx->queue;
 
         auto transfers = multigrid::get_structured_transfers(ctx->I, ctx->J, ctx->K, ctx->depth);
         ctx->core.setup(A, transfers.restriction, transfers.interpolation);
+        // Use the same queue and stencil decomposition as the V-cycle operators.
+        ctx->residual_matrix = multigrid::ConvSyclSparseMatrix<double>(ctx->queue);
+        ctx->residual_matrix.set(A, ctx->num_conv_mask_a);
         ctx->core.set_relax_counts(ctx->pre_relax, ctx->post_relax);
 
         for (size_t i = 0; i < ctx->core.relax_mats_.size(); i++)
@@ -131,15 +135,10 @@ namespace sycl_multigrid32f_gpu {
         float* d_b = ctx->d_b;
         float* d_x = ctx->d_x;
 
-        {
-            double* src = b;
-            float* dst = d_b;
-            ctx->queue.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
-                dst[i] = static_cast<float>(src[i]);
-            });
-        }
-
-        {
+        for (int cycle=0; cycle<ctx->max_cycles;) {
+            int batch = std::min(ctx->correction_interval, ctx->max_cycles - cycle);
+            ctx->residual_matrix.residual_to(x, b, d_b);
+            ctx->queue.memset(d_x, 0, sizeof(float) * n);
             multigrid::sycl_vector<float> d_b_vec, d_x_vec;
             d_b_vec.data_ = d_b;
             d_b_vec.size_ = n;
@@ -147,18 +146,14 @@ namespace sycl_multigrid32f_gpu {
             d_x_vec.size_ = n;
 
             ctx->core.set_relax_counts(ctx->pre_relax, ctx->post_relax);
-            ctx->core.v_cycle_multi(d_b_vec, d_x_vec, ctx->max_cycles);
+            ctx->core.v_cycle_multi(d_b_vec, d_x_vec, batch);
 
             d_b_vec.data_ = nullptr;
             d_x_vec.data_ = nullptr;
-        }
-
-        {
-            float* src = d_x;
-            double* dst = x;
             ctx->queue.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
-                dst[i] = static_cast<double>(src[i]);
+                x[i] += static_cast<double>(d_x[i]);
             });
+            cycle += batch;
         }
 
         ctx->queue.wait();
@@ -178,6 +173,12 @@ namespace sycl_multigrid32f_gpu {
             else if (key == "pre_relax") iss >> ctx->pre_relax;
             else if (key == "post_relax") iss >> ctx->post_relax;
             else if (key == "max_cycles") iss >> ctx->max_cycles;
+            else if (key == "correction_interval") {
+                int value = 0;
+                if (!(iss >> value) || value < 1)
+                    throw std::invalid_argument("correction_interval must be positive");
+                ctx->correction_interval = value;
+            }
             else if (key == "num_conv_mask") {
                 iss >> ctx->num_conv_mask;
                 ctx->num_conv_mask_relax = ctx->num_conv_mask;

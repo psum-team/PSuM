@@ -306,6 +306,23 @@ struct ConvSyclSparseMatrix {
         });
     }
 
+    // Disjoint output storage is required. Accumulate/subtract in T, then cast.
+    template<class Out>
+    void residual_to(const T* x, const T* b, Out* out) {
+        if (MatRows_ == 0) return;
+        if (!covers_all_rows_) {
+            int n = MatRows_;
+            queue_.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
+                out[i] = static_cast<Out>(b[i]);
+            });
+        }
+        if (num_residual_rows_ > 0) {
+            residual_spmv_.apply(x, d_compact_buf_);
+            scatter_kernel_<false, true>(out, b);
+        }
+        if (total_conv_rows_ > 0) conv_kernel_<false, true>(x, out, b);
+    }
+
     int rows() const { return MatRows_; }
     int cols() const { return MatRows_; }
 

@@ -146,6 +146,7 @@ public:
             } catch(const std::exception& e) {
                 std::cerr << "backend solving failed" << std::endl;
                 std::cerr << e.what() << '\n';
+                throw;
             }
         }
     }
