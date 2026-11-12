@@ -138,6 +138,7 @@ public:
             } catch(const std::exception& e) {
                 std::cerr<<"native solving failed"<<std::endl;
                 std::cerr << e.what() << '\n';
+                throw; // Do not report a failed residual gate as a successful solve.
             }
         } else {
             try {
@@ -145,6 +146,7 @@ public:
             } catch(const std::exception& e) {
                 std::cerr << "backend solving failed" << std::endl;
                 std::cerr << e.what() << '\n';
+                throw;
             }
         }
     }
@@ -423,7 +425,7 @@ protected:
                 backend_.set_matrix(n_rows, n_cols, nnz, rows.data(), cols.data(), const_cast<double*>(values));
             } catch(const std::exception& e) {
                 std::cerr << "Backend initialization failed: " << e.what() << std::endl;
-                return;
+                throw;
             }
         }
 	}

@@ -5,6 +5,7 @@
 #include <vector>
 #include <type_traits>
 #include <iostream>
+#include <stdexcept>
 #include "sparse_linear_trait.hpp"
 
 namespace psum {
@@ -36,7 +37,17 @@ struct multigrid_core {
         stay
     };
 
+    // Legacy interface for externally supplied transfer operators. Structured
+    // callers use the explicit R/P overload below, including boundary weights.
     inline void setup(const EigenSpMatrix& A, const std::vector<EigenSpMatrix>& RMats, double c_coeff)
+    {
+        std::vector<EigenSpMatrix> PMats;
+        for (const auto& R : RMats) PMats.emplace_back(R.transpose() * c_coeff);
+        setup(A, RMats, PMats);
+    }
+
+    inline void setup(const EigenSpMatrix& A, const std::vector<EigenSpMatrix>& RMats,
+                      const std::vector<EigenSpMatrix>& PMats)
     {
         std::vector<Eigen::ArrayXd> dmat_inv_tmp;
         std::vector<EigenSpMatrix> relax_mats_tmp;
@@ -80,7 +91,7 @@ struct multigrid_core {
         
         for (int i = 0; i < restrict_mats_tmp.size(); i++)
         {
-            interpolate_mats_tmp[i] = (restrict_mats_tmp[i].transpose() * c_coeff).eval();
+            interpolate_mats_tmp[i] = PMats[i];
         }
         
         for (int i = 1; i < a_mats_tmp.size(); i++)
@@ -158,6 +169,11 @@ struct multigrid_core {
             throw std::runtime_error("invalid multigrid_core status");
         }
         
+        if (cached_cycles_ == cycles && cached_levels_ == relax_mats_.size()
+            && cached_pre_ == pre_relax_ && cached_post_ == post_relax_) {
+            solve_sequence(cached_sequence_, in, out);
+            return;
+        }
         std::vector<std::pair<int, ShiftGrid>> opt_seq;
 
         for (int i = 0; i < cycles; i++)
@@ -174,10 +190,16 @@ struct multigrid_core {
         }
         opt_seq.push_back(std::make_pair(0, ShiftGrid::go_finer));
         
-        solve_sequence(opt_seq, in, out);
+        cached_sequence_ = std::move(opt_seq);
+        cached_cycles_ = cycles; cached_levels_ = relax_mats_.size();
+        cached_pre_ = pre_relax_; cached_post_ = post_relax_;
+        solve_sequence(cached_sequence_, in, out);
     }
 
 private:
+    std::vector<std::pair<int, ShiftGrid>> cached_sequence_;
+    int cached_cycles_=-1, cached_pre_=-1, cached_post_=-1;
+    size_t cached_levels_=0;
     int pre_relax_ = 1;
     int post_relax_ = 1;
 
@@ -230,7 +252,7 @@ private:
             {
                 if(opt.first != 0 || opt.second != ShiftGrid::go_finer)
                     throw std::runtime_error("invalid sequence in MultiGrid.");
-                if constexpr (requires(InnerSolverType solver, const Vector& b, Vector& x) { solver.solve_to(b, x); }) {
+                if constexpr (requires { inner_solver_.solve_to(b_items_.back(), x_items_.back()); }) {
                     inner_solver_.solve_to(b_items_.back(), x_items_.back());
                 } else {
                     x_items_.back() = inner_solver_.solve(b_items_.back());
@@ -243,7 +265,10 @@ private:
 
     inline void smooth(int level)
     {
-        matrix_traits<MatrixType>::multiply_add(relax_mats_[level], x_items_[level], b_items_[level], x_items_[level], 2.0 / 3, 1.0);
+        // Jacobi must read the complete old iterate. Ping-pong buffers permit
+        // a fused matrix/add kernel without overwriting a neighbour's input.
+        matrix_traits<MatrixType>::multiply_add(relax_mats_[level], x_items_[level], b_items_[level], buf_vec_[level], 2.0/3, 1.0);
+        std::swap(x_items_[level], buf_vec_[level]);
     }
 };
 

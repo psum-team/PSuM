@@ -8,6 +8,7 @@
 #include "convSparseMatrix.hpp"
 #include "sycl_vector.hpp"
 #include <type_traits>
+#include <algorithm>
 
 namespace psum {
 
@@ -150,6 +151,8 @@ struct ConvSyclSparseMatrix {
     sycl::queue queue_;
     int MatRows_ = 0;
     bool Anchor_at_max_ = false;
+    bool covers_all_rows_ = false; // true IF every row is either in a convolution group or has a non-zero entry in the residual matrix.
+    // if true, every row in spmv will be given in conv_kernel or (residual spmv + scatter) .
 
     int num_groups_ = 0;
     int total_conv_rows_ = 0;
@@ -182,6 +185,7 @@ struct ConvSyclSparseMatrix {
         : queue_(other.queue_),
           MatRows_(other.MatRows_),
           Anchor_at_max_(other.Anchor_at_max_),
+          covers_all_rows_(other.covers_all_rows_),
           num_groups_(other.num_groups_),
           total_conv_rows_(other.total_conv_rows_),
           total_stencil_entries_(other.total_stencil_entries_),
@@ -206,6 +210,7 @@ struct ConvSyclSparseMatrix {
             queue_ = other.queue_;
             MatRows_ = other.MatRows_;
             Anchor_at_max_ = other.Anchor_at_max_;
+            covers_all_rows_ = other.covers_all_rows_;
             num_groups_ = other.num_groups_;
             total_conv_rows_ = other.total_conv_rows_;
             total_stencil_entries_ = other.total_stencil_entries_;
@@ -242,6 +247,7 @@ struct ConvSyclSparseMatrix {
         ConvSparseMatrix<T> cpu_analyzer;
         cpu_analyzer.set(mat, 0);
         upload_residual_data_(cpu_analyzer);
+        check_row_coverage_(cpu_analyzer);
         alloc_multiply_scratch_();
     }
 
@@ -258,13 +264,14 @@ struct ConvSyclSparseMatrix {
 
         upload_conv_data_(cpu_analyzer);
         upload_residual_data_(cpu_analyzer);
+        check_row_coverage_(cpu_analyzer);
         alloc_multiply_scratch_();
     }
 
     void multiply(const T* d_in, T* d_out) {
         if (MatRows_ == 0) return;
 
-        queue_.memset(d_out, 0, sizeof(T) * MatRows_);
+        if (!covers_all_rows_) queue_.memset(d_out, 0, sizeof(T) * MatRows_);
 
         if (num_residual_rows_ > 0) {
             residual_spmv_.apply(d_in, d_compact_buf_);
@@ -277,6 +284,17 @@ struct ConvSyclSparseMatrix {
     }
 
     void multiply_add(const T* d_in, const T* d_b, T* d_out, T b_coeff, T ans_coeff) {
+        // Direct writes are safe only when every row is written and no
+        // stencil input is overwritten. b may alias out: each row reads itself.
+        if (covers_all_rows_ && d_in != d_out) {
+            if (num_residual_rows_ > 0) {
+                residual_spmv_.apply(d_in, d_compact_buf_);
+                scatter_kernel_<true>(d_out, d_b, b_coeff, ans_coeff);
+            }
+            if (total_conv_rows_ > 0)
+                conv_kernel_<true>(d_in, d_out, d_b, b_coeff, ans_coeff);
+            return;
+        }
         multiply(d_in, multiply_scratch_);
 
         int N = MatRows_;
@@ -286,6 +304,23 @@ struct ConvSyclSparseMatrix {
                 d_out[idx] = scratch[idx] * ans_coeff + d_b[idx] * b_coeff * ans_coeff;
             });
         });
+    }
+
+    // Disjoint output storage is required. Accumulate/subtract in T, then cast.
+    template<class Out>
+    void residual_to(const T* x, const T* b, Out* out) {
+        if (MatRows_ == 0) return;
+        if (!covers_all_rows_) {
+            int n = MatRows_;
+            queue_.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
+                out[i] = static_cast<Out>(b[i]);
+            });
+        }
+        if (num_residual_rows_ > 0) {
+            residual_spmv_.apply(x, d_compact_buf_);
+            scatter_kernel_<false, true>(out, b);
+        }
+        if (total_conv_rows_ > 0) conv_kernel_<false, true>(x, out, b);
     }
 
     int rows() const { return MatRows_; }
@@ -400,6 +435,14 @@ private:
         }
     }
 
+    void check_row_coverage_(const ConvSparseMatrix<T>& cpu) {
+        std::vector<bool> covered(MatRows_, false);
+        for (int row : cpu.non_all_zero_rows) covered.at(row) = true;
+        for (const auto& group : cpu.convCmpt)
+            for (int row : group.second) covered.at(row) = true;
+        covers_all_rows_ = std::all_of(covered.begin(), covered.end(), [](bool v){return v;});
+    }
+
     void upload_residual_data_(const ConvSparseMatrix<T>& cpu) {
         num_residual_rows_ = static_cast<int>(cpu.non_all_zero_rows.size());
 
@@ -416,19 +459,24 @@ private:
         }
     }
 
-    void scatter_kernel_(T* d_out) {
+    template<bool Add = false, bool Residual = false, class Out = T>
+    void scatter_kernel_(Out* d_out, const T* b = nullptr, T bc = T(0), T ac = T(1)) {
         int count = num_residual_rows_;
         int* rows = d_non_all_zero_rows_;
         T* compact = d_compact_buf_;
 
         queue_.submit([&](sycl::handler& h) {
             h.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-                d_out[rows[idx]] = compact[idx];
+                int row = rows[idx];
+                if constexpr (Residual) d_out[row] = static_cast<Out>(b[row] - compact[idx]);
+                else if constexpr (Add) d_out[row] = compact[idx] * ac + b[row] * bc * ac;
+                else d_out[row] = compact[idx];
             });
         });
     }
 
-    void conv_kernel_(const T* d_in, T* d_out) {
+    template<bool Add = false, bool Residual = false, class Out = T>
+    void conv_kernel_(const T* d_in, Out* d_out, const T* b = nullptr, T bc = T(0), T ac = T(1)) {
         conv_group_desc* groups = d_groups_;
         int* rows = d_conv_rows_;
         int* anchors = d_conv_anchors_;
@@ -438,7 +486,7 @@ private:
         bool anchor_mode = Anchor_at_max_;
         int total = total_conv_rows_;
         const T* in = d_in;
-        T* out = d_out;
+        Out* out = d_out;
 
         queue_.submit([&](sycl::handler& h) {
             h.parallel_for(sycl::range<1>(total), [=](sycl::id<1> idx) {
@@ -451,7 +499,9 @@ private:
                 for (int c = 0; c < c_cnt; c++) {
                     v += s_vals[c_off + c] * in[s_offsets[c_off + c] + anchor];
                 }
-                out[row] = v;
+                if constexpr (Residual) out[row] = static_cast<Out>(b[row] - v);
+                else if constexpr (Add) out[row] = v * ac + b[row] * bc * ac;
+                else out[row] = v;
             });
         });
     }
