@@ -69,6 +69,9 @@ struct MultiGridSolverConv {
         if (!matrix_.rows())
             throw std::runtime_error("Matrix not set");
 
+        initialized_ = false;
+        if (static_cast<long long>(I) * J * K != matrix_.rows())
+            throw std::invalid_argument("multigrid: grid dimensions do not match matrix");
         auto transfers = get_structured_transfers(I, J, K, depth);
         core_.setup(matrix_, transfers.restriction, transfers.interpolation);
         core_.relax_mats_[0].set(core_.relax_mats_[0].original_mat, num_conv_mask_relax_);
@@ -85,13 +88,12 @@ struct MultiGridSolverConv {
         initialized_ = true;
     }
 
-    inline double get_residual_norm(const Eigen::VectorXd& b, const Eigen::VectorXd& x) const
-    {
-        return (b - matrix_ * x).norm();
-    }
-
     inline void solve(const Eigen::VectorXd& b, Eigen::VectorXd& x)
     {
+        if (max_cycles_ < 1)
+            throw std::invalid_argument("multigrid: max_cycles must be positive");
+        if (x.size() != b.size())
+            x = Eigen::VectorXd::Zero(b.size());
         core_.set_relax_counts(pre_relax_, post_relax_);
         if (!initialized_)
             throw std::runtime_error("Solver not initialized");
