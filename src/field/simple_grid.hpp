@@ -51,6 +51,8 @@ namespace field {
         }
 
     public:
+        simple_grid() : simple_grid(std::vector<double>(Dimension, 0.0), std::vector<double>(Dimension, 1.0), std::vector<int>(Dimension, 1)) {}
+
         simple_grid(const Eigen::Vector<double, Dim>& lower_point, const Eigen::Vector<double, Dim>& upper_point, const std::vector<int>& size) {
             generate_from_eigen(lower_point, upper_point, size);
         }
@@ -417,6 +419,27 @@ namespace field {
         auto cubic_interp_diff(const simple_grid<Dim>& grid, const VecDim& p) {
             return gen_interp_diff<4, Dim, &cubic_bspline_1D>(grid, p);
         }
+    }
+
+}
+
+namespace serialization {
+
+    template <int Dim>
+    void save(mas_file& fp, const std::string& name, const field::simple_grid<Dim>& obj) {
+        save(fp, name + ".lower", std::vector<double>(obj.get_lower_bounds().begin(), obj.get_lower_bounds().end()));
+        save(fp, name + ".upper", std::vector<double>(obj.get_upper_bounds().begin(), obj.get_upper_bounds().end()));
+        save(fp, name + ".cells", std::vector<int>(obj.get_cell_num().begin(), obj.get_cell_num().end()));
+    }
+
+    template <int Dim>
+    void load(mas_file& fp, const std::string& name, field::simple_grid<Dim>& obj) {
+        std::vector<double> lower, upper;
+        std::vector<int> cells;
+        load(fp, name + ".lower", lower);
+        load(fp, name + ".upper", upper);
+        load(fp, name + ".cells", cells);
+        obj = field::simple_grid<Dim>(lower, upper, cells);
     }
 }
 

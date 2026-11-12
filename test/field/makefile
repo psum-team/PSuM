@@ -59,9 +59,15 @@ test_host_field_interpDiff: test_host_field_interpDiff.cpp
 	./test_host_field_interpDiff
 	rm test_host_field_interpDiff
 
+test_sl: test_sl.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test_sl test_sl.cpp $(LIBS) $(LDFLAGS)
+	./test_sl
+	rm test_sl
+
 test_cov:
 	./../coverage_utils/make_coverage_test.sh \
 		test_simplegrid.cpp \
+		test_sl.cpp \
 		test_simpleinterp.cpp \
 		test_simpleinterpDiff.cpp \
 		test_field_interp.cpp \

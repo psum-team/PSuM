@@ -37,6 +37,11 @@ test7: test_json_loader.cpp
 	./test7
 	rm test7
 
+test8: test_objmng_queue.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test8 test_objmng_queue.cpp $(LIBS) $(LDFLAGS)
+	./test8
+	rm test8
+
 test_cov: 
 	./../coverage_utils/make_coverage_test.sh \
 	test_mas.cpp \
