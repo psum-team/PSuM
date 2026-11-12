@@ -23,6 +23,7 @@ namespace eigen_multigrid_cpu {
         std::vector<double> source_replace_values;
         std::vector<unsigned long long> source_addback_idxs;
         std::vector<double> source_addback_values;
+        Eigen::VectorXd result_buf;
     };
 
     psum_field_solver_handle init() {
@@ -53,7 +54,9 @@ namespace eigen_multigrid_cpu {
         SolverContext* ctx = static_cast<SolverContext*>(h);
 
         Eigen::Map<Eigen::VectorXd> rhs(b, ctx->n_row);
-        Eigen::VectorXd result(ctx->n_row);
+        Eigen::VectorXd& result = ctx->result_buf;
+        if (result.size() != ctx->n_row) result.resize(ctx->n_row);
+        std::memcpy(result.data(), x, sizeof(double) * ctx->n_row);
 
         for (size_t i = 0; i < ctx->source_addback_idxs.size(); ++i) {
             rhs[ctx->source_addback_idxs[i]] += ctx->source_addback_values[i];

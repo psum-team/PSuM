@@ -30,6 +30,8 @@ auto check_same = [](Particle& p1, Particle& p2) {
 };
 
 int main() {
+    int failures = 0;
+
 
     sycl::queue q;
     object_manager mng("tmp.mas", q);
@@ -68,11 +70,11 @@ int main() {
     mng.save(file);
 
     object_manager mng2("tmp_saved.mas", q);
-    if (check_same(mng2.obj<Particle>("p1"), p1)) cout << "S/L p1: pass\n"; else cout << "S/L p1: fail\n";
+    if (check_same(mng2.obj<Particle>("p1"), p1)) cout << "S/L p1: pass\n"; else { cout << "S/L p1: fail\n"; failures++; }
 
     auto& loaded_int_vector = mng2.obj<device_vector<int>>("int_vector");
     auto loaded_host = loaded_int_vector.to_host();
-    if (loaded_host.size() == 2 && loaded_host[0] == 7 && loaded_host[1] == 42) cout << "S/L int_vector: pass\n"; else cout << "S/L int_vector: fail\n";
+    if (loaded_host.size() == 2 && loaded_host[0] == 7 && loaded_host[1] == 42) cout << "S/L int_vector: pass\n"; else { cout << "S/L int_vector: fail\n"; failures++; }
     device_vector<Particle> loaded_particles(q);
     mng2.obj<pGroup>("pgroup").for_each([&](sycl::handler& h) {
         auto loaded_particles_acc = loaded_particles.get_access(h);
@@ -81,21 +83,21 @@ int main() {
         };
     });
     auto loaded_particles_host = loaded_particles.to_host();
-    if (mng2.obj<pGroup>("pgroup").size() == 2 && check_same(loaded_particles_host[0], p1) && check_same(loaded_particles_host[1], p1)) cout << "S/L pgroup: pass\n"; else cout << "S/L pgroup: fail\n";
+    if (mng2.obj<pGroup>("pgroup").size() == 2 && check_same(loaded_particles_host[0], p1) && check_same(loaded_particles_host[1], p1)) cout << "S/L pgroup: pass\n"; else { cout << "S/L pgroup: fail\n"; failures++; }
 
     auto& loaded_dfield = mng2.obj<psum::field::cell_field1D<double>>("dfield");
     auto loaded_dfield_host = loaded_dfield.getContent().to_host();
     bool dfield_ok = loaded_dfield.has_grid() && loaded_dfield.size() == 16;
     for (size_t i = 0; dfield_ok && i < loaded_dfield.size(); i++)
         dfield_ok = dfield_ok && (loaded_dfield_host[i] == 0.125 * i);
-    if (dfield_ok) cout << "S/L dfield: pass\n"; else cout << "S/L dfield: fail\n";
+    if (dfield_ok) cout << "S/L dfield: pass\n"; else { cout << "S/L dfield: fail\n"; failures++; }
 
     auto& loaded_grid = mng2.obj<psum::field::grid1D>("grid1");
     if (loaded_grid.get_cell_num() == std::array<int, 1>{16} && 
         loaded_grid.get_lower_bounds() == std::array<double, 1>{0.0} && 
         loaded_grid.get_upper_bounds() == std::array<double, 1>{1.0}
     ) 
-        cout << "S/L grid1: pass\n"; else cout << "S/L grid1: fail\n";
+        cout << "S/L grid1: pass\n"; else { cout << "S/L grid1: fail\n"; failures++; }
 
     auto& loaded_mpg = mng2.obj<MPG>("mpg1");
     {
@@ -105,12 +107,12 @@ int main() {
             && loaded_mpg.get_upper_bounds() == std::array<double, 2>{1.0, 1.0}
             && lp == std::array<int, 2>{2, 2}
             && rp == std::vector<int>{2, 2, 3, 2};
-        if (mpg_ok) cout << "S/L mpg1: pass\n"; else cout << "S/L mpg1: fail\n";
+        if (mpg_ok) cout << "S/L mpg1: pass\n"; else { cout << "S/L mpg1: fail\n"; failures++; }
     }
 
     auto& loaded_darr = mng2.obj<psum::field::device_array<double>>("darr");
     auto loaded_darr_host = loaded_darr.to_host();
-    if (loaded_darr_host == arr_src) cout << "S/L darr: pass\n"; else cout << "S/L darr: fail\n";
+    if (loaded_darr_host == arr_src) cout << "S/L darr: pass\n"; else { cout << "S/L darr: fail\n"; failures++; }
 
     object_manager mng_noq("tmp_saved.mas");
     bool noq_pass = false;
@@ -132,7 +134,9 @@ int main() {
             noq_pass = noq_pass && string(e3.what()).find("queue") != string::npos;
         }
     }
-    if (noq_pass) cout << "queue-less manager rejection: pass\n"; else cout << "queue-less manager rejection: fail\n";
+    if (noq_pass) cout << "queue-less manager rejection: pass\n"; else { cout << "queue-less manager rejection: fail\n"; failures++; }
 
-    return 0;
+    if (failures) cout << "test_objmng_queue: " << failures << " FAILURES" << endl;
+    else cout << "test_objmng_queue: all checks passed" << endl;
+    return failures ? 1 : 0;
 }
