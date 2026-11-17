@@ -104,10 +104,11 @@ USE_CUDA := 0       # 如果没有cuda环境，就应当覆盖默认值
 
 **执行步骤**:
 1. 加载 `env_load.sh` 环境变量
-2. 编译 field solver 后端 (C++/CUDA)
-3. 测试 field solver 组件
-4. 编译 pypsum 序列化模块 (Python/C++ 互操作)
-5. 测试 pypsum 模块互操作性
+2. 编译序列化压缩对象 (基于LZMA库)
+3. 编译 field solver 后端 (C++/CUDA)
+4. 测试 field solver 组件
+5. 编译 pypsum 序列化模块 (Python/C++ 互操作)
+6. 测试 pypsum 模块互操作性
 
 **使用方法**:
 ```bash

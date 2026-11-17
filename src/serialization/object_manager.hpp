@@ -3,11 +3,13 @@
 
 #include <cxxabi.h>
 #include "mas.hpp"
+#include "compressor.hpp"
 #include "tag_sl.hpp"
 #include "container_sl.hpp"
 #include "simplify_type_name.hpp"
 #include <any>
 #include <memory>
+#include <thread>
 #include <optional>
 #include <sycl/sycl.hpp>
 
@@ -69,6 +71,16 @@ namespace serialization {
 
         object_manager(const std::filesystem::path& file_path, const sycl::queue& q)
             : object_manager(file_path) {
+            q_ = q;
+        }
+
+        // load via a compressor: the plain .mas is rebuilt from its compressed file
+        // by the given compressor first, then opened
+        object_manager(const std::filesystem::path& file_path, const compressor& method)
+            : object_manager(ensure_plain(file_path, method)) {}
+
+        object_manager(const std::filesystem::path& file_path, const compressor& method, const sycl::queue& q)
+            : object_manager(file_path, method) {
             q_ = q;
         }
 
@@ -146,6 +158,25 @@ namespace serialization {
                 throw std::runtime_error("Error: invalid file path.");
             mas_file file(file_path, serialization::mas_file::replaceMode);
             save(file);
+        }
+
+		// produce the compressed version, returns a compress_job handle.
+		// use detach() to fire-and-forget, or wait() to synchronize.
+        // plain file will be removed after compression
+        compress_job save_compressed(std::filesystem::path file_path, const compressor& method) {
+            save(file_path);
+            auto worker = method.clone();
+            auto err = std::make_shared<std::exception_ptr>();
+            std::thread worker_thread([file_path, worker = std::move(worker), err]() {
+                try {
+                    worker->compress(file_path);
+                    std::filesystem::remove(file_path);   // strictly after compress
+                }
+                catch (...) {
+                    *err = std::current_exception();
+                }
+            });
+            return compress_job(std::move(worker_thread), std::move(err));
         }
 
         template<typename T>

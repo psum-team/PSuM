@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "${SCRIPT_DIR}/env_scan.sh"
 source "${SCRIPT_DIR}/env_load.sh"
 
+echo "=== Building serialization compression object ==="
+cd "${SCRIPT_DIR}/src/serialization"
+make all
+
+echo ""
 echo "=== Building field solver backends ==="
 cd "${SCRIPT_DIR}/src/field_solver"
 make all

@@ -3,6 +3,7 @@
 *.plt
 !docs/psum_tour/psum_bitmap.plt
 *.mas
+*.mas.lzma
 *.temp
 .vscode
 *.so
