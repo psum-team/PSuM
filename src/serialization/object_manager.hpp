@@ -163,13 +163,13 @@ namespace serialization {
 		// produce the compressed version, returns a compress_job handle.
 		// use detach() to fire-and-forget, or wait() to synchronize.
         // plain file will be removed after compression
-        compress_job save_compressed(std::filesystem::path file_path, const compressor& method) {
+        compress_job save_compressed(std::filesystem::path file_path, const compressor& method, const std::string& options = "") {
             save(file_path);
             auto worker = method.clone();
             auto err = std::make_shared<std::exception_ptr>();
-            std::thread worker_thread([file_path, worker = std::move(worker), err]() {
+            std::thread worker_thread([file_path, worker = std::move(worker), err, options]() {
                 try {
-                    worker->compress(file_path);
+                    worker->compress(file_path, options);
                     std::filesystem::remove(file_path);   // strictly after compress
                 }
                 catch (...) {

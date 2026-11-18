@@ -70,7 +70,7 @@ namespace serialization {
         }
 
         struct options_t {
-            unsigned level = 6;
+            unsigned level = 4;
             size_t dict_size = 0;    // 0 keeps the built-in 4 MiB default
         };
 
