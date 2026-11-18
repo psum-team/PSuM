@@ -21,10 +21,11 @@ namespace psum {
 namespace serialization {
 
     namespace qlzma_detail {
-        // fixed quantization gears: mantissa bits kept per double
-        //   40 -> ~1.2e-12 relative error
-        //   32 -> ~2.3e-10    24 -> ~6.0e-8
-        //   20 -> ~9.5e-7     16 -> ~6.0e-6
+        // fixed quantization gears: mantissa bits kept per double;
+        // relative error:
+        //   40 -> ~1e-12 
+        //   32 -> ~1e-10    24 -> ~1e-8    
+        //   20 -> ~1e-7     16 -> ~1e-5
         enum class gear { q40, q32, q24, q20, q16 };
 
         // split an options string into the quantize gear ("q=40|32|24|20|16",
