@@ -42,6 +42,16 @@ test8: test_objmng_queue.cpp
 	./test8
 	rm test8
 
+test9: test_mas_compress.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test9 test_mas_compress.cpp $(LIBS) $(LDFLAGS) -pthread
+	./test9
+	rm test9
+
+test10: test_qlzma.cpp
+	$(ACPP) $(COMMON_FLAGS) $(INCLUDES) -o test10 test_qlzma.cpp $(LIBS) $(LDFLAGS) -pthread
+	./test10
+	rm test10
+
 test_cov: 
 	./../coverage_utils/make_coverage_test.sh \
 	test_mas.cpp \
@@ -50,4 +60,7 @@ test_cov:
 	test_container_sl.cpp \
 	test_objmng.cpp \
 	test_objmng_complex.cpp \
-	test_json_loader.cpp
+	test_json_loader.cpp \
+	test_objmng_queue.cpp \
+	test_mas_compress.cpp \
+	test_qlzma.cpp

@@ -77,3 +77,7 @@ ifeq ($(USE_SYCL_MULTIGRID32F_GPU), 1)
 endif
 
 USE_BACKENDS = -Wl,--whole-archive $(FIELD_SOLVER_BIN)/registry.o $(FIELD_SOLVER_BIN)/impls.o -Wl,--no-whole-archive
+
+USE_COMPRESSION = $(PROJECT_ROOT)/src/serialization/bin/lzma_vendor.o
+# always link compression library if it exists.
+LIBS += $(USE_COMPRESSION)

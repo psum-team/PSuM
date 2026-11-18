@@ -12,7 +12,7 @@ PSuM 当前最有帮助的参与方式是提交 **Issue**——报告 Bug、提�
 
 本文档说明如何搭建开发环境并运行测试。无论你是否打算回馈贡献，只要你在基于 PSuM 构建或研究它，这些内容都有用。文档同时也记录了维护者遵循的约定，供参考。
 
-PSuM 是一个面向 [PIC（Particle-in-Cell）](docs/pic.md) 方法的 C++20/SYCL 框架。它以头文件为主，外加两个需要编译的组件（场求解器后端和 `pypsum` Python 绑定）。背景知识可阅读[编程指南](docs/programming.md)。
+PSuM 是一个面向 [PIC（Particle-in-Cell）](docs/pic.md) 方法的 C++20/SYCL 框架。它以头文件为主，外加少量需要编译的组件（场求解器后端和 `pypsum` Python 绑定等）。背景知识可阅读[编程指南](docs/programming.md)。
 
 ## 项目结构
 
@@ -24,7 +24,7 @@ PSuM 是一个面向 [PIC（Particle-in-Cell）](docs/pic.md) 方法的 C++20/SY
 | `application/` | 完整的物理应用（benchmark 算例）。 |
 | `example/` | 教学示例（Tour 系列）。 |
 | `pypsum/` | Python 互操作 / 序列化模块。 |
-| `third_party/` | 内嵌第三方库：`json.hpp`（MIT）。 |
+| `third_party/` | 内嵌第三方库：`json.hpp`（MIT）、`lzma/`（LZMA SDK，公有领域）。 |
 
 ## 开发环境配置
 
@@ -36,7 +36,7 @@ PSuM 是一个面向 [PIC（Particle-in-Cell）](docs/pic.md) 方法的 C++20/SY
 ```bash
 bash env_scan.sh                 # 自动探测依赖，生成 env_load.sh
 source env_load.sh               # 设置 PATH、CPATH、LIBRARY_PATH、LD_LIBRARY_PATH
-bash build.sh                    # 编译场求解器后端和 pypsum，并运行基础测试
+bash build.sh                    # 编译序列化压缩对象、场求解器后端与 pypsum，并运行基础测试
 ```
 
 - 在 `config.mk.local`（已被 gitignore）中覆盖默认配置，不要直接编辑 `config.mk`。

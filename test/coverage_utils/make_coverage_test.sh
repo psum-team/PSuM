@@ -11,6 +11,11 @@ if [ "$#" -lt 1 ]; then
 fi
 
 SRC_FILES=("$@")
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+LZMA_OBJ="$ROOT/src/serialization/bin/lzma_vendor.o"
+
 TMP_DIR=$(mktemp -d coverage_tmp.XXXX)
 PROFINFO_LIST=()
 
@@ -28,7 +33,10 @@ for SRC in "${SRC_FILES[@]}"; do
     echo "Compiling $SRC ..."
     acpp --acpp-platform=cpu --acpp-targets=omp \
         -g -O0 -fprofile-instr-generate -fcoverage-mapping \
-        -fPIC -std=c++20 "$SRC" -o "$EXE"
+        -fPIC -std=c++20 -pthread \
+        -I "$ROOT/include" -I "$ROOT/src" -I "$ROOT/third_party" \
+        -L/usr/lib/llvm-16/lib ${LZMA_OBJ:+$LZMA_OBJ} \
+        "$SRC" -o "$EXE"
 
     echo "Running $EXE ..."
     LLVM_PROFILE_FILE="$PROFRAW" "$EXE"
