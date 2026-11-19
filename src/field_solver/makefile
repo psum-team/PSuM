@@ -8,7 +8,7 @@ all:
 
 $(FIELD_SOLVER_BIN)/registry.o: register/registry.cpp
 	mkdir -p bin
-	$(ACPP) $(COMMON_FLAGS) -c register/registry.cpp -o bin/registry.o
+	$(ACPP) $(COMMON_FLAGS) -fPIC -c register/registry.cpp -o bin/registry.o
 
 $(FIELD_SOLVER_BIN)/%.o: implements/%.cpp
 	mkdir -p bin
