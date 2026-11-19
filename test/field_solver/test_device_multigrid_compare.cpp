@@ -19,7 +19,7 @@ void cuda_check(cudaError_t err) {
         throw runtime_error(string("CUDA error: ") + cudaGetErrorString(err));
 }
 
-void test_device_mg(const string& backend_name, int SIZE, int N_iter_ap, int num_conv_mask = 8) {
+void test_device_mg(const string& backend_name, int SIZE, int N_iter_ap, int num_conv_mask = 8, int correction_interval = 4) {
     (void)N_iter_ap;
 
     int I = SIZE;
@@ -31,8 +31,8 @@ void test_device_mg(const string& backend_name, int SIZE, int N_iter_ap, int num
 
     char opts[512];
     snprintf(opts, sizeof(opts),
-        "I %d J %d K %d depth %d max_cycles %d pre_relax %d post_relax %d num_conv_mask %d",
-        I + 1, J + 1, K + 1, 4, 5, 6, 4, num_conv_mask);
+        "I %d J %d K %d depth %d max_cycles %d pre_relax %d post_relax %d num_conv_mask %d correction_interval %d",
+        I + 1, J + 1, K + 1, 4, 5, 6, 4, num_conv_mask, correction_interval);
     pSolver.set_options(opts);
 
     pSolver.init(
@@ -93,7 +93,7 @@ void test_device_mg(const string& backend_name, int SIZE, int N_iter_ap, int num
         cuda_check(cudaFree(d_phi));
 
         ofstream fp(CurrentTimeStr + "_1_" + to_string(SIZE) + ".txt");
-        gt_print2file(std::filesystem::path(CurrentTimeStr + "_cudamg_" + to_string(SIZE) + ".txt"), timer::print_mode::DetailMode);
+        gt_print2file(std::filesystem::path(".") / std::filesystem::path(CurrentTimeStr + "_cudamg_" + to_string(SIZE) + ".txt"), timer::print_mode::DetailMode);
         fp << TimeUsed("solver") / 10 << " " << res << endl;
         fp.close();
 
@@ -139,8 +139,8 @@ void test_device_mg(const string& backend_name, int SIZE, int N_iter_ap, int num
     if (backend_name == "sycl_multigrid32f_gpu") backend_tag = "syclmg32f";
     if (backend_name == "cuda_multigrid_gpu") backend_tag = "cudamg";
     string fname = CurrentTimeStr + "_" + backend_tag + "_" + to_string(SIZE) + ".txt";
-    ofstream fp(fname);
-    gt_print2file(std::filesystem::path(fname), timer::print_mode::DetailMode);
+    gt_print2file(std::filesystem::path(".") / fname, timer::print_mode::DetailMode);
+    ofstream fp(fname, std::ios::app);
     fp << TimeUsed("solver") / 10 << " " << res << endl;
     fp.close();
 
@@ -153,23 +153,25 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (argc != 4 && argc != 5)
-        throw runtime_error("Invalid parameter. Usage: test_device_mg_compare <solver type> <size> <iteration_append> [num_conv_mask]. solver type = 0(sycl) or 1(cuda).");
+    if (argc != 4 && argc != 5 && argc != 6)
+        throw runtime_error("Invalid parameter. Usage: test_device_mg_compare <solver type> <size> <iteration_append> [num_conv_mask] [correction_interval]. solver type = 0(sycl) or 1(cuda).");
 
     int solver_type = stoi(argv[1]);
     int size = stoi(argv[2]);
     int N_app = stoi(argv[3]);
-    int num_conv_mask = argc == 5 ? stoi(argv[4]) : 8;
+    int num_conv_mask = argc >= 5 ? stoi(argv[4]) : 8;
+
+    int correction_interval = argc == 6 ? stoi(argv[5]) : 4;
 
     if (solver_type < 0 || solver_type > 2)
         throw runtime_error("Invalid solver type. solver type = 0(sycl-double) or 1(cuda) or 2(sycl-float32).");
 
     if (solver_type == 0) {
-        test_device_mg("sycl_multigrid_gpu", size, N_app, num_conv_mask);
+        test_device_mg("sycl_multigrid_gpu", size, N_app, num_conv_mask, correction_interval);
     } else if (solver_type == 2) {
-        test_device_mg("sycl_multigrid32f_gpu", size, N_app, num_conv_mask);
+        test_device_mg("sycl_multigrid32f_gpu", size, N_app, num_conv_mask, correction_interval);
     } else {
-        test_device_mg("cuda_multigrid_gpu", size, N_app, num_conv_mask);
+        test_device_mg("cuda_multigrid_gpu", size, N_app, num_conv_mask, correction_interval);
     }
 
     return 0;

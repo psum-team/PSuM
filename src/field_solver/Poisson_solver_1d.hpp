@@ -11,6 +11,8 @@
 #include "fixed_boundary.hpp"
 #include "mixed_boundary.hpp"
 #include "local_equation.hpp"
+#include "backend.hpp"
+#include <functional>
 
 namespace psum {
 
@@ -20,17 +22,126 @@ class Poisson_solver_1d{
     using Grid = psum::field::simple_grid<1>;
     using boundary_direction_1d = psum::field::boundary_direction_1d;
 public:
-    Poisson_solver_1d() : grid_({0.0}, {1.0}, {1}) {};
+    Poisson_solver_1d() : backend_name_("native"), grid_({0.0}, {1.0}, {1}) {};
     inline void init(const Grid &grid, const mixed_boundary_1d_list &boundaries, const fixed_boundary_1d_list &fbl, double _epsilon = 8.854e-12) {
-        init(grid, boundaries, fbl, [_epsilon](double) { return _epsilon; });
+        _init_impl("native", grid, boundaries, fbl, [_epsilon](double) { return _epsilon; });
+    }
+    inline void init(const Grid& grid, const mixed_boundary_1d_list& boundaries, const fixed_boundary_1d_list& fbl, const std::function<double(double)>& epsilon){
+        _init_impl("native", grid, boundaries, fbl, epsilon);
     }
     inline void init(const Grid& grid, const fixed_boundary_1d_list& fbl, double _epsilon = 8.854e-12){
-        init(grid, fbl, [_epsilon](double) { return _epsilon; });
+        _init_impl("native", grid, {}, fbl, [_epsilon](double) { return _epsilon; });
     }
     inline void init(const Grid& grid, const fixed_boundary_1d_list& fbl, const std::function<double(double)>& _epsilon){
-        init(grid, {}, fbl, _epsilon);
+        _init_impl("native", grid, {}, fbl, _epsilon);
     }
-    inline void init(const Grid& grid, const mixed_boundary_1d_list& mbl, const fixed_boundary_1d_list& fbl, const std::function<double(double)>& epsilon){
+    inline void init(const std::string& backend_name, const Grid &grid, const mixed_boundary_1d_list &boundaries, const fixed_boundary_1d_list &fbl, double _epsilon = 8.854e-12) {
+        _init_impl(backend_name, grid, boundaries, fbl, [_epsilon](double) { return _epsilon; });
+    }
+    inline void init(const std::string& backend_name, const Grid& grid, const mixed_boundary_1d_list& boundaries, const fixed_boundary_1d_list& fbl, const std::function<double(double)>& epsilon){
+        _init_impl(backend_name, grid, boundaries, fbl, epsilon);
+    }
+    inline void init(const std::string& backend_name, const Grid& grid, const fixed_boundary_1d_list& fbl, double _epsilon = 8.854e-12){
+        _init_impl(backend_name, grid, {}, fbl, [_epsilon](double) { return _epsilon; });
+    }
+    inline void init(const std::string& backend_name, const Grid& grid, const fixed_boundary_1d_list& fbl, const std::function<double(double)>& _epsilon){
+        _init_impl(backend_name, grid, {}, fbl, _epsilon);
+    }
+
+    inline const Eigen::SparseMatrix<double>& coeff_matrix() const {
+        return A_;
+    }
+
+    inline void solve(Eigen::Ref<Eigen::VectorXd> phi, const Eigen::Ref<const Eigen::VectorXd>& source) {
+        if(b_.size()!=A_.rows())
+            b_.resize(A_.rows());
+        if (source.size() != b_.size())
+            std::cerr << "Poisson_solver_1d solve: source and grid differ in size" << std::endl;
+        b_ = source;
+        if (phi.size() != b_.size())
+            phi.resize(A_.cols());
+        solve(phi.data(), b_.data());
+    }
+
+    inline void make_righthand_item(double* b) {
+        fbl_.evaluate(replace_elements_.second);
+        mbl_.evaluate(addback_elements_.second);
+
+        if (backend_name_ == "native") {
+            // add back source here
+            for (size_t i = 0; i < addback_elements_.first.size(); i++)
+                b[addback_elements_.first[i]] += addback_elements_.second[i];
+            // replace source here
+            for (size_t i = 0; i < replace_elements_.first.size(); i++)
+                b[replace_elements_.first[i]] = replace_elements_.second[i];
+        } else {
+            backend_.set_source_addback(addback_elements_.first.size(), addback_elements_.first.data(), addback_elements_.second.data());
+            backend_.set_source_replace(replace_elements_.first.size(), replace_elements_.first.data(), replace_elements_.second.data());
+        }
+    }
+    // assemble the right-hand side from rho without solving (3d-style
+    // overload); 1d has no ghost-elimination matrix, so mixed-boundary
+    // contributions are applied directly from mbl_ evaluation
+    inline void make_righthand_item(const Eigen::VectorXd& rho, Eigen::VectorXd& b) {
+        fbl_.evaluate(replace_elements_.second);
+        mbl_.evaluate(addback_elements_.second);
+        b = rho;
+        for (size_t i = 0; i < addback_elements_.first.size(); i++)
+            b[addback_elements_.first[i]] += addback_elements_.second[i];
+        for (size_t i = 0; i < replace_elements_.first.size(); i++)
+            b[replace_elements_.first[i]] = replace_elements_.second[i];
+    }
+
+    inline void solve(double* phi, double* source) {
+        make_righthand_item(source);
+        if (backend_name_ == "native") {
+            try {
+                Eigen::Map<Eigen::VectorXd> b(source, A_.rows());
+                Eigen::Map<Eigen::VectorXd> x(phi, A_.cols());
+                x = solver_.solve(b);
+                if (solver_.info() != Eigen::Success) {
+                    std::cerr << "SolveError: native solver solving failed" << std::endl;
+                }
+            } catch(const std::exception& e) {
+                std::cerr<<"native solving failed"<<std::endl;
+                std::cerr << e.what() << '\n';
+                throw;
+            }
+        } else {
+            try {
+                backend_.solve(source, phi);
+            } catch(const std::exception& e) {
+                std::cerr << "backend solving failed" << std::endl;
+                std::cerr << e.what() << '\n';
+                throw;
+            }
+        }
+    }
+
+    // set_options: set backend options string, must be called before init if needed
+    inline void set_options(const std::string& options) {
+        options_ = options;
+        if (backend_name_ != "native") {
+            if (!backend_.is_null())
+                backend_.set_options(options_.c_str());
+        }
+    }
+
+protected:
+    std::string backend_name_;
+    std::string options_;
+    Eigen::SparseMatrix<double> A_;
+    Eigen::SparseLU<Eigen::SparseMatrix<double>> solver_;
+    Eigen::VectorXd b_;
+    fixed_boundary_1d_list fbl_;
+    mixed_boundary_1d_list mbl_;
+    std::pair<std::vector<unsigned long long>, std::vector<double>> replace_elements_;
+    std::pair<std::vector<unsigned long long>, std::vector<double>> addback_elements_;
+    std::vector<double> mixed_boundary_values_;
+    Grid grid_;
+    solver_backend backend_;
+
+    inline void _init_impl(const std::string& backend_name, const Grid& grid, const mixed_boundary_1d_list& mbl, const fixed_boundary_1d_list& fbl, const std::function<double(double)>& epsilon){
         
         grid_ = grid;
         int n_nodes = grid_.contentSize(psum::field::var_loc::nodeCentered);
@@ -136,67 +247,49 @@ public:
 
         A_.setFromTriplets(tripletlist.begin(), tripletlist.end());
         A_.makeCompressed();
-        solver_.compute(A_);
 
-        if (solver_.info() != Eigen::Success)
-        {
-            std::cout << "SolveError1" << std::endl;
-            return;
-        }
-	}
+        backend_name_ = backend_name;
 
-    inline const Eigen::SparseMatrix<double>& coeff_matrix() const
-    {
-        return A_;
-    }
-
-    inline void solve(Eigen::Ref<Eigen::VectorXd> phi, const Eigen::Ref<const Eigen::VectorXd>& source) {
-        if(b_.size()!=A_.rows())
-            b_.resize(A_.rows());
-        if (source.size() != b_.size())
-            std::cerr << "Poisson_solver_1d solve: source and grid differ in size" << std::endl;
-        b_ = source;
-        if (phi.size() != b_.size())
-            phi.resize(A_.cols());
-        solve(phi.data(), b_.data());
-    }
-
-    inline void make_righthand_item(double* b)
-    {
-        fbl_.evaluate(replace_elements_.second);
-        mbl_.evaluate(addback_elements_.second);
-
-        for (size_t i = 0; i < addback_elements_.first.size(); i++)
-            b[addback_elements_.first[i]] += addback_elements_.second[i];
-        // replace source here
-        for (size_t i = 0; i < replace_elements_.first.size(); i++)
-            b[replace_elements_.first[i]] = replace_elements_.second[i];
-    }
-    inline void solve(double* phi, double* source) {
-        make_righthand_item(source);
-        try {
-            Eigen::Map<Eigen::VectorXd> b(source, A_.rows());
-            Eigen::Map<Eigen::VectorXd> x(phi, A_.cols());
-            x = solver_.solve(b);
-            if (solver_.info() != Eigen::Success) {
-                std::cerr << "SolveError: native solver solving failed" << std::endl;
+        if (backend_name_ == "native") {
+            solver_.compute(A_);
+            if (solver_.info() != Eigen::Success)
+            {
+                std::cerr << "SolveError: native solver buidling failed" << std::endl;
+                return;
             }
-        } catch(const std::exception& e) {
-            std::cerr<<"native solving failed"<<std::endl;
-            std::cerr << e.what() << '\n';
+        } else {
+            try {
+                solver_backend new_backend(backend_name_.c_str());
+                backend_ = std::move(new_backend);
+
+                if (!options_.empty()) {
+                    backend_.set_options(options_.c_str());
+                }
+
+                int n_rows = A_.rows();
+                int n_cols = A_.cols();
+                int nnz = A_.nonZeros();
+                const int* outerPtr = A_.outerIndexPtr();
+                const int* innerIdx = A_.innerIndexPtr();
+                const double* values = A_.valuePtr();
+
+                std::vector<unsigned long long> rows, cols;
+                rows.reserve(nnz);
+                cols.reserve(nnz);
+                for (int k = 0; k < n_cols; ++k) {
+                    for (int i = outerPtr[k]; i < outerPtr[k+1]; ++i) {
+                        rows.push_back(innerIdx[i]);
+                        cols.push_back(k);
+                    }
+                }
+
+                backend_.set_matrix(n_rows, n_cols, nnz, rows.data(), cols.data(), const_cast<double*>(values));
+            } catch(const std::exception& e) {
+                std::cerr << "Backend initialization failed: " << e.what() << std::endl;
+                throw;
+            }
         }
     }
-
-protected:
-    Eigen::SparseMatrix<double> A_;
-    Eigen::SparseLU<Eigen::SparseMatrix<double>> solver_;
-    Eigen::VectorXd b_;
-    fixed_boundary_1d_list fbl_;
-    mixed_boundary_1d_list mbl_;
-    std::pair<std::vector<unsigned long long>, std::vector<double>> replace_elements_;
-    std::pair<std::vector<unsigned long long>, std::vector<double>> addback_elements_;
-    std::vector<double> mixed_boundary_values_;
-    Grid grid_;
 };
 
 }

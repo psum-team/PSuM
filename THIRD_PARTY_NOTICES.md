@@ -11,9 +11,14 @@ only to those components, not to PSuM.
 | Component | Source | License | License Text |
 |-----------|--------|---------|--------------|
 | nlohmann/json | <https://github.com/nlohmann/json> | MIT | SPDX header in [`third_party/json.hpp`](./third_party/json.hpp) |
+| LZMA SDK | <https://www.7-zip.org/sdk.html> | Public domain | Public-domain statement in each header of [`third_party/lzma/`](./third_party/lzma/) |
 
 ### Notes
 
+- **LZMA SDK** (Igor Pavlov) is placed in the public domain. The vendored
+  subset under `third_party/lzma/` keeps the upstream files unmodified; the
+  copyright/public-domain statement appears in the header comment of every
+  file. No separate license text is required.
 - **nlohmann/json** is distributed under the MIT License. Copyright © 2013-2023
   Niels Lohmann. The copyright and license are declared in the SPDX header at
   the top of `third_party/json.hpp`; the full license text is reproduced below

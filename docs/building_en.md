@@ -104,10 +104,11 @@ This file is not tracked by git.
 
 **Execution Steps**:
 1. Load `env_load.sh` environment variables
-2. Compile field solver backends (C++/CUDA)
-3. Test field solver components
-4. Compile pypsum serialization module (Python/C++ interop)
-5. Test pypsum module interoperability
+2. Compile the serialization compression object (LZMA, vendored under third_party)
+3. Compile field solver backends (C++/CUDA)
+4. Test field solver components
+5. Compile pypsum serialization module (Python/C++ interop)
+6. Test pypsum module interoperability
 
 **Usage**:
 ```bash

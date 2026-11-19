@@ -20,7 +20,7 @@ you contribute back. It also documents the conventions the maintainers follow,
 for reference.
 
 PSuM is a C++20/SYCL framework for the [Particle-in-Cell (PIC)](docs/pic_en.md) method. It is
-header-first, with two compiled components (field solver backends and the
+header-first, with some compiled components (field solver backends and the
 `pypsum` Python bindings). For background, read the
 [Programming Guide](docs/programming_en.md).
 
@@ -34,7 +34,7 @@ header-first, with two compiled components (field solver backends and the
 | `application/` | Full physics applications (benchmark cases). |
 | `example/` | Tutorial examples (Tour series). |
 | `pypsum/` | Python interop / serialization module. |
-| `third_party/` | Vendored: `json.hpp` (MIT). |
+| `third_party/` | Vendored: `json.hpp` (MIT), `lzma/` (LZMA SDK, public domain). |
 
 ## Development environment setup
 
@@ -46,7 +46,7 @@ environment variables.
 ```bash
 bash env_scan.sh                 # auto-detect deps, generates env_load.sh
 source env_load.sh               # sets PATH, CPATH, LIBRARY_PATH, LD_LIBRARY_PATH
-bash build.sh                    # compiles field solver backends + pypsum, runs basic tests
+bash build.sh                    # compiles serialization compression object + field solver backends + pypsum, runs basic tests
 ```
 
 - Override defaults in `config.mk.local` (gitignored), never edit `config.mk` directly.

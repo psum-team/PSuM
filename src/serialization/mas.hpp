@@ -6,6 +6,8 @@
 #include <fstream>
 #include <iostream>
 #include "foundation.hpp"
+#include "compressor.hpp"
+#include <thread>
 #include <unordered_map>
 
 // mas is short for Multi-Array-Set
@@ -58,6 +60,11 @@ namespace serialization {
 		// replaceMode: clear the existing file and create a new one
 		// quickMode: open the existing file without read block heads
 		enum OpenMode {autoMode, replaceMode, quickMode};
+
+		// construct from a compressed archive: the plain file is
+		// rebuilt from its compressed file by the given compressor, then opened
+		mas_file(const std::filesystem::path& file_path, const compressor& method)
+			: mas_file(ensure_plain(file_path, method)) {}
 
 		mas_file(const std::filesystem::path& file_path, OpenMode mode = autoMode) :filename(file_path) {
 			bool fileExists = std::filesystem::exists(file_path);
@@ -397,6 +404,23 @@ namespace serialization {
 
 		std::string getFilename() const {
 			return filename;
+		}
+
+		// produce the compressed version, returns a compress_job handle.
+		// use detach() to fire-and-forget, or wait() to synchronize.
+		compress_job compress(const compressor& method, const std::string& options = "") {
+			auto worker = method.clone();
+			auto err = std::make_shared<std::exception_ptr>();
+			std::thread worker_thread([name = filename, options,
+			                            worker = std::move(worker), err]() {
+				try {
+					worker->compress(name, options);
+				}
+				catch (...) {
+					*err = std::current_exception();
+				}
+			});
+			return compress_job(std::move(worker_thread), std::move(err));
 		}
 
 		std::vector<mas_block_head>& getHeads() {
