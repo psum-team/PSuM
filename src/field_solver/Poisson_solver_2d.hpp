@@ -102,6 +102,33 @@ public:
         }
     }
 
+    // assemble the right-hand side from rho without solving (3d-style
+    // overload); mixed-boundary contributions via the elimination matrix M_
+    inline void make_righthand_item(const Eigen::VectorXd& rho, Eigen::VectorXd& b) {
+        fbl_.evaluate(replace_elements_.second);
+        mbl_.evaluate(mixed_boundary_values_);
+
+        for (auto& v: addback_elements_.second)
+            v = 0.0;
+        int count = 0;
+        for (int k = 0; k < M_.outerSize(); ++k) {
+            bool reach_inner_loop = false;
+            for (decltype(M_)::InnerIterator it(M_, k); it; ++it) {
+                reach_inner_loop = true;
+                if (it.row() != addback_elements_.first[count])
+                    throw std::runtime_error("make_righthand_item: addback_elements_ status broken.");
+                addback_elements_.second[count] += it.value() * mixed_boundary_values_[it.col()];
+            }
+            if (reach_inner_loop)
+                count++;
+        }
+        b = rho;
+        for (size_t i = 0; i < addback_elements_.first.size(); i++)
+            b[addback_elements_.first[i]] += addback_elements_.second[i];
+        for (size_t i = 0; i < replace_elements_.first.size(); i++)
+            b[replace_elements_.first[i]] = replace_elements_.second[i];
+    }
+
     inline void solve(double* phi, double* source) {
         make_righthand_item(source);
         if (backend_name_ == "native") {
@@ -115,6 +142,7 @@ public:
             } catch(const std::exception& e) {
                 std::cerr<<"native solving failed"<<std::endl;
                 std::cerr << e.what() << '\n';
+                throw;
             }
         } else {
             try {
@@ -122,6 +150,7 @@ public:
             } catch(const std::exception& e) {
                 std::cerr << "backend solving failed" << std::endl;
                 std::cerr << e.what() << '\n';
+                throw;
             }
         }
     }
@@ -375,10 +404,10 @@ protected:
                 backend_.set_matrix(n_rows, n_cols, nnz, rows.data(), cols.data(), const_cast<double*>(values));
             } catch(const std::exception& e) {
                 std::cerr << "Backend initialization failed: " << e.what() << std::endl;
-                return;
+                throw;
             }
         }
-	}
+    }
 };
 
 }
