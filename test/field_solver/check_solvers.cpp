@@ -40,8 +40,8 @@ int main() {
 
         std::cout << "CPU ";
         benchmark_backend("eigen_sparselu_cpu", n, 10);
-        std::cout << "MG ";
-        benchmark_backend("eigen_multigrid_cpu", n, 10);
+        // std::cout << "MG ";
+        // benchmark_backend("eigen_multigrid_cpu", n, 10); //<- it works very slowly in CI
         std::cout << "Schur ";
         benchmark_backend("eigen_schurcomplement_cpu", n, 10);
         std::cout << "GPU ";
@@ -205,7 +205,9 @@ void benchmark_backend(const char* solver_name, int n, int repeats) {
 
     solver.set_matrix(N, N, rows.size(), rows.data(), cols.data(), vals.data());
     for (int r = 0; r < repeats; ++r) {
+        Tic(solver_name_str + "_solve")
         solver.solve(b.data(), x.data());
+        Toc
     }
     double max_residual = compute_residual(rows, cols, vals, b, x);
     if (max_residual < 1e-8) {
@@ -245,7 +247,9 @@ void benchmark_backend_gpu(const char* solver_name, int n, int repeats, const st
     psum::field::device_array<double> b_d(q, b);
     psum::field::device_array<double> x_d(q, b);
     for (int r = 0; r < repeats; ++r) {
+        Tic(solver_name_str + "_solve")
         solver.solve(b_d.data(), x_d.data());
+        Toc
     }
     x = x_d.to_host();
     double max_residual = compute_residual(rows, cols, vals, b, x);
