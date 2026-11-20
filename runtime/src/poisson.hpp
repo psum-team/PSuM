@@ -127,8 +127,6 @@ namespace poisson {
         if (has_robin && !robin_center) return -1;
         std::string backend = backend_name ? backend_name : "";
         std::string opts = options ? options : "";
-        if (dim == 1 && !backend.empty() && backend != "native")
-            return -2;   // the 1d solver has no backend overloads
         if (!backend.empty() && backend != "native"
             && get_solver_funcs(backend.c_str()).init == nullptr) {
             // backend unavailable in this build (e.g. gpu-less): degrade
@@ -170,7 +168,7 @@ namespace poisson {
                 }
             }
             s.s1.emplace();
-            s.s1->init(g, list_from<fs::mixed_boundary_1d_list>(mixed),
+            s.s1->init(backend, g, list_from<fs::mixed_boundary_1d_list>(mixed),
                         list_from<fs::fixed_boundary_1d_list>(fixed), epsilon);
             return 0;
         }
