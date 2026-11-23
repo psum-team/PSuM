@@ -226,29 +226,42 @@ decltype(auto) get_access(sycl::handler& h) {
 
 #### 插值与沉积
 
-用户在核函数中可用使用多个插值/沉积相关函数，均接受位置和场访问器：
+用户在核函数中可以使用多个插值/沉积相关函数，均接受位置和场访问器：
 
 - **`interp(pos, field_acc)`** — 在粒子位置线性插值场量值（仅节点场）
 - **`interp_diff(pos, field_acc)`** — 插值场量梯度，返回 `Dim` 组值（仅节点场）, 为各个分量上的梯度
 - **`add_back(pos, weight, field_acc)`** — 将粒子权量沉积到网格（原子加，仅节点场）
+- **`interp_2nd/3rd/4th`、`interp_diff_2nd/3rd/4th`、`add_back_2nd/3rd/4th`** — 2/3/4 次 B 样条高阶变体（仅节点场，定义于 `src/field/higher_order_interp.hpp`）
+- **`interp_B_spline<Order>`、`interp_diff_B_spline<Order>`、`add_back_B_spline<Order>`** — 以阶数为参数的统一模板函数，`Order ∈ {1,2,3,4}`
 - **`interp_nearest(pos, field_acc)`** / **`add_back_nearest(pos, weight, field_acc)`** — 最近邻变体（节点场和格子场均可用）
 
-`interp, interp_diff, add_back` 函数内部通过 `interp_tools::generate_interp` / `generate_add_back` 等统一实现，模板参数指定具体的 1D 插值核。
+这些入口共享同一套可以逐层生成的底层机制。
 
-**插值核心 `interp_tensor`：** 将 1D 插值函数扩展到 N 维的张量积框架。
+**一维插值函数** `linear_interp_1D(x)` 返回 `{1-x, x}` 两个系数（2点线性插值）；
+`src/field/simple_interpolation.hpp` 下另提供了 `quadratic_bspline_1D`（3 点）、
+`cubic_bspline_1D`（4 点）、`quartic_bspline_1D`（5 点）版本。
+每个一维插值函数还需经 `diff_map<Func1D>`绑定其微分，下游泛型代码因此能对任意核自动查到导数，无需调用方手工配对。
 
-1D 线性插值函数 `linear_interp_1D(x)` 返回 `{1-x, x}`（两个系数，对应左右节点）。
-`interp_tensor` 对每个维度独立调用 1D 函数，将结果做笛卡尔积，产生 `2^Dim` 个支持点及其系数。
+一维插值函数的自变量是单元归一化坐标（即一个格子的宽度为1）。
+偶数支撑（线性 2 点、三次 4 点）的插值函数，定义域为 `[0, 1)` 类区间，
+奇数支撑（二次 3 点、四次 5 点）的定义域为 `[-0.5, 0.5)` 类区间。
 
-例如 2D 时，支持点为 4 个角节点，系数为 `(1-x)(1-y), (1-x)y, x(1-y), xy`。
+**张量积。** `interp_tensor` 把一维核扩展到 N 维：每维独立调用同一个核，结果做笛卡尔积，
+产生 `SupportSize1D^Dim` 个支持点及其系数（`simple_interpolation.hpp:40-52`）。
+2D 线性时即 4 个角节点、系数 `(1-x)(1-y), (1-x)y, x(1-y), xy`。
+梯度插值按同样的方式生成：方向 `d` 的系数 = "`d` 维导数核 × 其余维值核"，
+为每个方向计算得到 `SupportSize1D^Dim` 个系数。
 
-**Gather（`generate_interp`）：**
+**进入场量与周期回绕。** `gen_interp` / `gen_interp_diff`把张量积函数接到具体网格上，
+产出 `(索引, 系数)` 对。过小的系数会被跳过，而超出网格的索引会按绕回的方式调整至网格内，相当于周期性边界。
+
+**Gather：**
 ```
 对每个支持点 i：
     res += field_acc(index[i]) * coeff[i]
 ```
 
-**Scatter（`generate_add_back`）：**
+**Scatter：**
 ```
 对每个支持点 i：
     atomic_add(field_acc(index[i]), value * coeff[i])
@@ -269,7 +282,7 @@ PSuM 目前主要求解静电 PIC 中常见的 Poisson 方程，接口按维度�
 
 #### 离散化与矩阵装配
 
-`Poisson_solver_2d` 和 `Poisson_solver_3d` 使用规则网格上的有限差分离散。
+`Poisson_solver_1d`、`Poisson_solver_2d` 和 `Poisson_solver_3d` 使用规则网格上的有限体积离散。
 以二维笛卡尔坐标为例，网格节点上的未知量为电势 `phi`，内部节点对应的离散方程大致是：
 
 ```text
@@ -515,7 +528,7 @@ particles.for_each([&](sycl::handler& h) {
 序列化模块负责把 PSuM 中的状态保存为文件，并在下一次运行时恢复。
 它承担两类任务：
 
-- 将基础数组、Eigen 对象、STL 容器、tagged_struct、device 容器保存到 MAS 文件。
+- 将基础数组、Eigen 对象、STL 容器、tagged_struct、device 容器、网格与场量保存到 MAS 文件。
 - 用 `object_manager` 和 `json_loader` 管理模拟状态和配置参数。
 
 #### mas 二进制格式
@@ -544,11 +557,13 @@ MAS 默认不允许同名数据块重复写入。
 #### 泛型 save/load
 
 序列化接口以重载的 `save(fp, key, obj)` 和 `load(fp, key, obj)` 为中心。
-不同类型的支持分散在几个文件中：
+不同类型的支持分散在多个文件中：
 
-- `foundation.hpp`：基础类型和类型擦除指针。
-- `container_sl.hpp`：`std::vector`、`device_vector` 等容器。
+- `mas.hpp` / `foundation.hpp`：基础类型、字符串与 Eigen 矩阵。
+- `container_sl.hpp`：`std::vector` 与 `std::map`、`std::unordered_map`; 当容器的元素类型可S/L时，这些容器也支持。
 - `tag_sl.hpp`：`tagged_struct` 的按标签序列化。
+- `device_vector.hpp` / `device_array.hpp` / `particle_group.hpp`：设备容器序列化，同时记录来源设备名，便于在多device设备上恢复。
+- `simple_grid.hpp` / `host_field.hpp` / `device_field.hpp` / `multi_patch/`：网格与场量。
 - `object_manager.hpp`：对象级管理和批量保存。
 
 `tagged_struct` 的序列化特别依赖 tag 系统。
@@ -563,17 +578,31 @@ MAS 默认不允许同名数据块重复写入。
 `object_manager` 面向“断点续跑”和“统一管理模拟状态”。
 它内部维护：
 
-- `objects_`：`std::unordered_map<std::string, std::any>`，保存已经注册的对象。
+- `objects_`：`std::unordered_map<std::string, std::any>`，保存已经注册的对象。对象以 `std::shared_ptr<T>` 形式存储，键为 `类型名[对象名]`。
 - `savers_`：每个对象对应的保存函数。
 - `file_`：可选的已有 MAS 文件，用于恢复初始状态。
+- `q_`：可选的 `sycl::queue`，用于构造需要队列的类型。object_manager所持有的queue会用于创建其`obj`调用所产生的对象。
 
 用户通过 `mng.obj<T>(name)` 取得对象引用。
 如果对象已经在内存中，就返回已有对象；如果没有，就默认构造一个对象，并尝试从关联的 MAS 文件中读取同名同类型数据。
-保存时，`object_manager::save()` 会遍历所有注册过的 saver，把对象写入新的 MAS 文件。
+保存时，`object_manager::save()` 会遍历所有注册过的 saver，把对象写入新的 MAS 文件；
+原文件中未被 saver 覆盖的其余数据块也会被搬运到新文件。
+因此，如果object_manager关联到一个mas文件，其中的内容也会出现在save产生的新mas文件中。
 
 为了避免覆盖正在读取的断点文件，`object_manager` 会检查保存路径。
 如果当前 manager 关联了一个已有文件，保存目标必须是另一个合法路径。
 这可以减少“读取旧状态时顺手把旧状态覆盖掉”的风险。
+
+#### 文件压缩
+
+序列化模块为mas和object_manager提供了压缩能力。相关的接口包括：
+
+- `mas_file::compress(method, options)` 返回 `compress_job` 句柄，压缩在后台线程进行，明文文件保留。
+- `object_manager::save_compressed(path, method, options)` 先同步完成普通保存，后台压缩成功后删除明文文件。
+- `mas_file fp(path, method)` / `object_manager mng(path, method[, q])` 直接从压缩文件构造：先解压重建明文文件再打开。
+
+注意，压缩总是发生在mas文件写入硬盘之后，而且用时较长。可以通过 `detach()` 避免阻塞程序的其他部分。
+详情请参阅[序列化压缩设计文档](detailed_design/serialization_and_compression.md)。
 
 #### json_loader
 

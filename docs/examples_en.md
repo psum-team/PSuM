@@ -11,7 +11,7 @@ Reference code for each stage is also provided in the corresponding subdirectory
 These examples do not aim for physical rigor or completeness; instead, they emphasize **interactivity** and **visual verifiability** — you can tell at a glance from the visualization output whether the program behaves as expected.
 
 When reading the tour documentation, it is recommended to create your own files and follow along with the instructions.
-The files already present under `example/` (such as `stage_1.cpp`, `stage_2.cpp`) are "reference solutions" — you do not need to edit them; create your own file and compare against them.
+The files already present under `example/` (such as `stage_1.cpp`, `stage_2.cpp`) are "reference solutions" — they are not the entry points you are required to run directly at the outset.
 
 - **Big Bang** (`example/big_bang/`, [details](psum_tour/big_bang_en.md)): A 2D electrostatic PIC introductory example.
 A small cluster of same-sign charged particles is placed in a square domain. The self-consistent electric field causes the cluster to expand outward, and particles reaching the boundary are absorbed.
@@ -39,6 +39,6 @@ Each case directory contains a brief README with its reference literature.
 - **CCP** (`application/benchmark/CCP/`): Capacitively coupled plasma (1D), He discharge + MCC, RF bias 450 V / 13.56 MHz, with literature comparison.
 - **DSMC** (`application/benchmark/DSMC/`): Rarefied gas DSMC example, N₂ supersonic jet impinging on a plate, VHS collision model + internal energy exchange.
 - **EDI** (`application/benchmark/EDI/`): ExB drift discharge (2D), simulating electron/ion transport in a Hall thruster channel, with magnetic field profile and ionization source terms.
-- **TSI** (`application/benchmark/TSI/`): Two-stream instability (1D), a classic electrostatic kinetic benchmark for verifying energy conservation and phase space evolution.
+- **TSI** (`application/benchmark/TSI/`): Two-stream instability (1D), a classic electrostatic kinetic benchmark for verifying energy conservation and phase space evolution. The deposition/interpolation order is configured via the compile-time constant `interp_order` in the source code (orders 1–4: linear/quadratic/cubic/quartic B-splines, default 1).
 - **sheath** (`application/benchmark/sheath/`): Plasma sheath (1D), biased wall 12.5 V, with literature comparison.
 - **particle-impulse-integration** (`application/benchmark/particle-impulse-integration/`): Particle impulse integration; a fast algorithm for free molecular flow steady state, compared against a high-accuracy reference solution.

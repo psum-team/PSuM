@@ -231,24 +231,37 @@ Users can use multiple interpolation/deposition-related functions in kernel code
 - **`interp(pos, field_acc)`** — Linearly interpolates field values at the particle position (node fields only)
 - **`interp_diff(pos, field_acc)`** — Interpolates field gradients, returning `Dim` sets of values (node fields only), one for each component's gradient
 - **`add_back(pos, weight, field_acc)`** — Deposits particle weights onto the grid (atomic add, node fields only)
+- **`interp_2nd/3rd/4th`, `interp_diff_2nd/3rd/4th`, `add_back_2nd/3rd/4th`** — Higher-order 2nd/3rd/4th-order B-spline variants (node fields only, defined in `src/field/higher_order_interp.hpp`)
+- **`interp_B_spline<Order>`, `interp_diff_B_spline<Order>`, `add_back_B_spline<Order>`** — Unified template functions parameterized by order, `Order ∈ {1,2,3,4}`
 - **`interp_nearest(pos, field_acc)`** / **`add_back_nearest(pos, weight, field_acc)`** — Nearest-neighbor variants (available for both node and cell fields)
 
-The `interp`, `interp_diff`, `add_back` functions are internally unified through `interp_tools::generate_interp` / `generate_add_back` etc., with template parameters specifying the concrete 1D interpolation kernel.
+These entry points share a single underlying mechanism that can be generated layer by layer.
 
-**Interpolation core `interp_tensor`:** A tensor product framework that extends 1D interpolation functions to N dimensions.
+**1D interpolation functions.** `linear_interp_1D(x)` returns the two coefficients `{1-x, x}` (2-point linear interpolation);
+`src/field/simple_interpolation.hpp` additionally provides `quadratic_bspline_1D` (3-point),
+`cubic_bspline_1D` (4-point), and `quartic_bspline_1D` (5-point) versions.
+Each 1D interpolation function must also have its derivative bound via `diff_map<Func1D>`; downstream generic code can thereby look up the derivative of any kernel automatically, without the caller pairing them manually.
 
-The 1D linear interpolation function `linear_interp_1D(x)` returns `{1-x, x}` (two coefficients, for left and right nodes).
-`interp_tensor` independently calls the 1D function for each dimension and takes the Cartesian product of the results, producing `2^Dim` support points and their coefficients.
+The argument of a 1D interpolation function is the cell-normalized coordinate (i.e. one cell has width 1).
+Even-support kernels (linear 2-point, cubic 4-point) are defined on `[0, 1)`-type intervals,
+while odd-support kernels (quadratic 3-point, quartic 5-point) are defined on `[-0.5, 0.5)`-type intervals.
 
-For example, in 2D, the support points are 4 corner nodes with coefficients `(1-x)(1-y), (1-x)y, x(1-y), xy`.
+**Tensor product.** `interp_tensor` extends the 1D kernel to N dimensions: the same kernel is invoked independently for each dimension, and the results are combined in a Cartesian product,
+producing `SupportSize1D^Dim` support points and their coefficients (`simple_interpolation.hpp:40-52`).
+In the 2D linear case these are the 4 corner nodes with coefficients `(1-x)(1-y), (1-x)y, x(1-y), xy`.
+Gradient interpolation is generated the same way: the coefficients for direction `d` = "the direction-`d` derivative kernel × the value kernels of the remaining dimensions",
+yielding `SupportSize1D^Dim` coefficients for each direction.
 
-**Gather (`generate_interp`):**
+**Entering fields and periodic wrap.** `gen_interp` / `gen_interp_diff` connect the tensor-product functions to a concrete grid,
+producing `(index, coefficient)` pairs. Overly small coefficients are skipped, and indexes beyond the grid are wrapped back into it, which is equivalent to a periodic boundary.
+
+**Gather:**
 ```
 For each support point i:
     res += field_acc(index[i]) * coeff[i]
 ```
 
-**Scatter (`generate_add_back`):**
+**Scatter:**
 ```
 For each support point i:
     atomic_add(field_acc(index[i]), value * coeff[i])
@@ -269,7 +282,7 @@ The solver has two internal layers:
 
 #### Discretization and Matrix Assembly
 
-`Poisson_solver_2d` and `Poisson_solver_3d` use finite difference discretization on regular grids.
+`Poisson_solver_1d`, `Poisson_solver_2d` and `Poisson_solver_3d` use finite volume discretization on regular grids.
 Taking the 2D Cartesian case as an example, the unknown quantity at grid nodes is the electric potential `phi`. The discrete equation for interior nodes is approximately:
 
 ```text
@@ -515,7 +528,7 @@ These functions accept a `rander&` reference and are implemented in separate 1D/
 The serialization module is responsible for saving PSuM state to files and restoring it in subsequent runs.
 It handles two categories of tasks:
 
-- Saving basic arrays, Eigen objects, STL containers, tagged_structs, and device containers to MAS files.
+- Saving basic arrays, Eigen objects, STL containers, tagged_structs, device containers, grids and fields to MAS files.
 - Managing simulation state and configuration parameters via `object_manager` and `json_loader`.
 
 #### MAS Binary Format
@@ -546,9 +559,11 @@ This design makes replacement operations approximately O(1), at the cost of pote
 The serialization interface centers on overloaded `save(fp, key, obj)` and `load(fp, key, obj)` functions.
 Support for different types is distributed across several files:
 
-- `foundation.hpp`: Basic types and type-erased pointers.
-- `container_sl.hpp`: `std::vector`, `device_vector`, and other containers.
+- `mas.hpp` / `foundation.hpp`: basic types, strings, and Eigen matrices.
+- `container_sl.hpp`: `std::vector`, `std::map` and `std::unordered_map`; these containers are supported whenever their element types support S/L.
 - `tag_sl.hpp`: Tag-based serialization of `tagged_struct`.
+- `device_vector.hpp` / `device_array.hpp` / `particle_group.hpp`: device-container serialization, which also records the originating device name for restoration on multi-device setups.
+- `simple_grid.hpp` / `host_field.hpp` / `device_field.hpp` / `multi_patch/`: grids and fields.
 - `object_manager.hpp`: Object-level management and batch saving.
 
 `tagged_struct` serialization particularly depends on the tag system.
@@ -563,17 +578,31 @@ The documentation and interface both emphasize that device container data across
 `object_manager` is designed for "checkpoint restart" and "unified simulation state management".
 It internally maintains:
 
-- `objects_`: `std::unordered_map<std::string, std::any>`, storing registered objects.
+- `objects_`: `std::unordered_map<std::string, std::any>`, storing registered objects. Objects are held as `std::shared_ptr<T>`, keyed by `type_name[object_name]`.
 - `savers_`: The save function for each object.
 - `file_`: An optional existing MAS file for restoring initial state.
+- `q_`: An optional `sycl::queue`, used to construct types that require a queue. The queue held by object_manager is used to create the objects produced by its `obj` calls.
 
 Users obtain object references via `mng.obj<T>(name)`.
 If the object is already in memory, the existing object is returned; if not, a default-constructed object is created and an attempt is made to read data with the same name and type from the associated MAS file.
-When saving, `object_manager::save()` iterates through all registered savers and writes objects to a new MAS file.
+When saving, `object_manager::save()` iterates through all registered savers and writes objects to a new MAS file;
+the remaining data blocks of the original file not covered by any saver are also carried over into the new file.
+Consequently, if an object_manager is associated with a mas file, that file's content will also appear in the new mas file produced by save.
 
 To avoid overwriting the checkpoint file being read, `object_manager` checks the save path.
 If the current manager is associated with an existing file, the save target must be a different valid path.
 This reduces the risk of "accidentally overwriting old state while reading it."
+
+#### File Compression
+
+The serialization module provides compression for mas and object_manager. The relevant interfaces are:
+
+- `mas_file::compress(method, options)` returns a `compress_job` handle; compression runs on a background thread and the plain file is kept.
+- `object_manager::save_compressed(path, method, options)` first completes an ordinary save synchronously; the plain file is removed after the background compression succeeds.
+- `mas_file fp(path, method)` / `object_manager mng(path, method[, q])` construct directly from a compressed file: the plain file is decompressed and rebuilt first, then opened.
+
+Note that compression always happens after the mas file has been written to disk, and it takes considerable time. `detach()` can be used to avoid blocking the rest of the program.
+For details, see the [serialization and compression design document](detailed_design/serialization_and_compression_en.md).
 
 #### json_loader
 

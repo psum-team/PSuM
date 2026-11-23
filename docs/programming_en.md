@@ -277,7 +277,24 @@ particles.for_each([&](sycl::handler& h) {
 
 Different field types support different interpolation/deposition methods.
 
-If you only need nearest-neighbor versions, you can use `interp_nearest` and `add_back_nearest`. For details on interpolation kernels, tensor product expansion, and atomic deposition, see [Framework Design](design_en.md).
+If you only need nearest-neighbor versions, you can use `interp_nearest` and `add_back_nearest`.
+PSuM also provides higher-order 2nd/3rd/4th-order B-spline kernels, with entry points explicitly named by order:
+
+```cpp
+add_back_2nd(pos, w, rho_acc);              // 2nd-order (quadratic B-spline) deposition
+auto [ex] = interp_diff_3rd(pos, phi_acc);  // 3rd-order (cubic B-spline) gradient interpolation
+```
+To select the order through a uniform template parameter, use the order-parameterized calls:
+
+```cpp
+add_back_B_spline<2>(pos, w, rho_acc);   // equivalent to add_back_2nd
+auto v = interp_B_spline<1>(pos, f_acc); // 1st order, equivalent to interp
+```
+
+The template parameter `Order` takes values 1–4, corresponding to linear, quadratic, cubic, and quartic B-splines; `Order=1` is fully equivalent to `interp` / `interp_diff` / `add_back`.
+
+Choosing the order is a trade-off between accuracy and cost: each support point set has size `(Order+1)^Dim` (in 3D, orders 1/2/3/4 correspond to 8/27/64/125 nodes).
+Higher orders produce smoother deposition and less particle noise, but also more computation. For the implementation of interpolation kernels, tensor product expansion, and atomic deposition, see [Framework Design](design_en.md).
 
 ### Solving the Poisson Equation
 
@@ -308,7 +325,19 @@ The typical usage flow is:
 ```
 
 Fixed boundaries (Dirichlet) directly specify potential values; mixed boundaries (Robin) handle conditions involving both function values and normal derivatives.
-The solver can use the default `native` backend, or you can select an alternative backend during initialization.
+The solver can use the default `native` backend, or you can select an alternative backend during initialization. Solvers in all three dimensions support the same set of backend selection methods.
+For example, the 1D solver (identical in structure to 2D/3D):
+
+```cpp
+Poisson_solver_1d solver;
+solver.init("eigen_sparselu_cpu", grid, fbl);  // the first argument is the registered backend name
+solver.solve(phi, rho);
+```
+
+Some backends require additional setup before use; call `solver.set_options(...)` before `init`.
+Note that `solve` does not automatically convert data between host and device. The `native` and `*_cpu` backends require `solve` to be given host pointers,
+while `*_gpu` backends require device pointers. This design minimizes extra data-movement overhead.
+For the complete list of built-in backends and their registered names, see the [field solver backend design document](detailed_design/field_solver_backend_en.md).
 
 Matrix assembly, ghost node elimination, and the backend plugin mechanism are internal implementation details; see [Framework Design](design_en.md).
 
@@ -376,7 +405,27 @@ save(fp, "particles", particles);
 load(fp, "particles", particles);
 ```
 
+Fundamental types and their containers, particle groups, grids, fields and so on all support saving and loading this way.
+
 When managing multiple objects, you can use `object_manager`. It is well-suited for checkpoint/restart: objects are registered with the `object_manager`, and on the next run they are restored from an existing MAS file.
+For types that manage resources on the device, such as `device_vector` and `device_field`, the manager itself must be configured with a `sycl::queue`.
+
+```cpp
+object_manager mng("", q);
+auto& ids = mng.obj<device_vector<int>>("ids"); // the sycl::queue needed by ids' construction comes directly from mng's q
+```
+
+Checkpoint files can be saved compressed and restored directly from the compressed file on the next run:
+
+```cpp
+auto job = mng.save_compressed("state.mas", lzma_compressor{});  // default options
+job.wait();                                                      // wait for the background compression to finish
+
+object_manager mng2("state.mas", lzma_compressor{}, q);          // restore from state.mas.lzma
+```
+
+If waiting is undesirable, call `detach()` on the returned job and let the compression finish in the background.
+See the [serialization and compression design document](detailed_design/serialization_and_compression_en.md) for details.
 
 Configuration files can be loaded with `json_loader`:
 

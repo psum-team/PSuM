@@ -39,6 +39,6 @@ example 下已经存在的文件 (如`stage_1.cpp`、`stage_2.cpp`) 是"参考�
 - **CCP** (`application/benchmark/CCP/`)：容性耦合等离子体（1D），He 放电 + MCC，RF 偏压 450 V / 13.56 MHz，含文献对照。
 - **DSMC** (`application/benchmark/DSMC/`)：稀薄气体 DSMC 算例，N₂ 超声速射流撞击平板，VHS 碰撞模型 + 内能交换。
 - **EDI** (`application/benchmark/EDI/`)：ExB 漂移放电（2D），模拟霍尔推进器通道内电子/离子输运，含磁场剖面与电离源项。
-- **TSI** (`application/benchmark/TSI/`)：双流不稳定性（1D），经典静电动理学基准，用于检验能量守恒与相空间演化。
+- **TSI** (`application/benchmark/TSI/`)：双流不稳定性（1D），经典静电动理学基准，用于检验能量守恒与相空间演化。沉积/插值阶数由源码中的编译期常量 `interp_order` 配置（1–4 阶：线性/二次/三次/四次 B 样条，默认 1）。
 - **sheath** (`application/benchmark/sheath/`)：等离子体鞘层（1D），偏压壁面 12.5 V, 含文献对照。
 - **particle-impulse-integration** (`application/benchmark/particle-impulse-integration/`)：粒子脉冲积分；自由分子流稳态快速算法，与高精度参考解对照。

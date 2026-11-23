@@ -73,9 +73,10 @@ If env_load.sh is unreliable, you should set environment variables manually. Thi
 - Compiler settings: `CXX`, `NVCC`, `ACPP`
 - Feature toggles: `USE_EIGEN`, `USE_UMFPACK`, `USE_CUDA` (0=disable, 1=enable)
 - CUDA architecture: `CUDA_ARCH` (default sm_75)
-- Backend selection: `USE_CUDA_SPARSELU_GPU`, `USE_EIGEN_SPARSELU_CPU`
+- Backend selection: `USE_CUDA_SPARSELU_GPU`, `USE_EIGEN_SPARSELU_CPU`, `USE_CUDA_SCHURCOMPLEMENT_GPU`, etc.
+- Compression library: `USE_COMPRESSION` (points to `src/serialization/bin/lzma_vendor.o`, on by default)
 - General compilation options: `-O3 -std=c++20`
-- Library linking: CUDA, UMFPACK, Eigen related libraries
+- Library linking: CUDA, UMFPACK, Eigen related libraries, and the LZMA compression object
 
 Users can view the default configuration here and override settings in `config.mk.local` as needed.
 
@@ -104,7 +105,7 @@ This file is not tracked by git.
 
 **Execution Steps**:
 1. Load `env_load.sh` environment variables
-2. Compile the serialization compression object (LZMA, vendored under third_party)
+2. Compile the serialization compression object (based on the LZMA library)
 3. Compile field solver backends (C++/CUDA)
 4. Test field solver components
 5. Compile pypsum serialization module (Python/C++ interop)

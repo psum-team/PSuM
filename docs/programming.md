@@ -279,7 +279,24 @@ particles.for_each([&](sycl::handler& h) {
 
 不同场量支持的插值/沉积方式有差异。
 
-如果只需要最近邻版本，可以使用 `interp_nearest` 和 `add_back_nearest`。插值核、张量积展开和原子沉积的实现见 [框架设计](design.md)。
+如果只需要最近邻版本，可以使用 `interp_nearest` 和 `add_back_nearest`。
+PSuM 同时提供 2/3/4 次 B 样条高阶核，对应的入口按阶数显式命名：
+
+```cpp
+add_back_2nd(pos, w, rho_acc);              // 2 阶（二次 B 样条）沉积
+auto [ex] = interp_diff_3rd(pos, phi_acc);  // 3 阶（三次 B 样条）梯度插值
+```
+若希望通过统一的模板参数选择阶数，可使用以阶数为模板参数的调用：
+
+```cpp
+add_back_B_spline<2>(pos, w, rho_acc);   // 等价于 add_back_2nd
+auto v = interp_B_spline<1>(pos, f_acc); // 1 阶，等价于 interp
+```
+
+模板参数 `Order` 取 1–4，分别对应线性、二次、三次、四次 B 样条；`Order=1` 与 `interp` / `interp_diff` / `add_back` 完全等价。
+
+阶数的选择是精度与代价的权衡：每个支持点集的大小为 `(Order+1)^Dim`（3 维下 1/2/3/4 阶分别为 8/27/64/125 个节点），
+阶数越高沉积越光滑、粒子噪声越小，但计算量也越大。插值核、张量积展开和原子沉积的实现见 [框架设计](design.md)。
 
 ### 求解 Poisson 方程
 
@@ -310,7 +327,19 @@ for each time step:
 ```
 
 固定边界（Dirichlet）用于直接指定电势值；混合边界（Robin）用于包含函数值和法向导数的边界条件。
-求解器可以使用默认 `native` 后端，也可以在初始化时选择其他后端。
+求解器可以使用默认 `native` 后端，也可以在初始化时选择其他后端。三个维度的求解器都支持同一套后端选择方式。
+例如一维求解器（与二/三维同构）：
+
+```cpp
+Poisson_solver_1d solver;
+solver.init("eigen_sparselu_cpu", grid, fbl);  // 第一个参数是后端注册名
+solver.solve(phi, rho);
+```
+
+部分后端需要做额外设置才能使用，应在 `init` 之前调用 `solver.set_options(...)`。
+需要注意，`solve` 并不会自动处理设备端/主机端的数据内容转换。`native`后端和`*_cpu`后端要求solve传入主机端指针，
+而`*_gpu`要求solve传入设备端指针。这种设计是为了尽可能地减少额外的数据移动开支。
+内置后端的完整清单与注册名见 [场求解器后端设计文档](detailed_design/field_solver_backend.md)。
 
 矩阵装配、ghost 节点消元和 backend 插件机制属于内部实现，见 [框架设计](design.md)。
 
@@ -378,7 +407,27 @@ save(fp, "particles", particles);
 load(fp, "particles", particles);
 ```
 
+基础类型及其容器、粒子组、网格、场量等均支持这样保存和读取。
+
 需要管理多个对象时，可以使用 `object_manager`。它适合断点续跑：使用的对象从 object_manager 对象中注册，下一次运行从已有 MAS 文件中恢复。
+如需管理设备上资源的类型，如 `device_vector`、`device_field`等，则需要为 manager 也配置一个 `sycl::queue`。
+
+```cpp
+object_manager mng("", q);
+auto& ids = mng.obj<device_vector<int>>("ids"); // ids构造时所需的sycl::queue直接来自于mng的q
+```
+
+断点文件可以压缩保存，下次运行时直接从压缩文件恢复：
+
+```cpp
+auto job = mng.save_compressed("state.mas", lzma_compressor{});  // 默认选项
+job.wait();                                                      // 等待后台压缩完成
+
+object_manager mng2("state.mas", lzma_compressor{}, q);          // 从 state.mas.lzma 恢复
+```
+
+若不想等待，可以对返回的 job 调用 `detach()`，让压缩在后台完成。
+相关内容详见[序列化及压缩设计文档](detailed_design/serialization_and_compression.md)。
 
 配置文件可以用 `json_loader`：
 

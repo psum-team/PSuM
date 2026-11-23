@@ -15,7 +15,7 @@ PSuM 提供三类前端求解器，适用于不同的网格类型和应用场景
 
 | 前端求解器 | 网格类型 | 离散方法 | 适用场景 |
 |-----------|---------|---------|---------|
-| `Poisson_solver_2d/3d` | `simple_grid<2/3>` | 交错网格有限差分 (FDM) | 结构化网格，2D/3D |
+| `Poisson_solver_1d/2d/3d` | `simple_grid<1/2/3>` | 有限体积 | 结构化网格，1D/2D/3D |
 | `FEM_Poisson_solver_2d` | `tri_mesh` | 有限元 (FEM) | 非结构化三角网格 |
 | `MPG_Poisson_solver_2d` | `multi_patch_grid<2>` | 有限元 (FEM) | 多分辨率网格, 基于 FEM 求解器 |
 
@@ -29,7 +29,7 @@ PSuM 提供三类前端求解器，适用于不同的网格类型和应用场景
 ```mermaid
 graph TB
     subgraph Frontend["前端求解器层"]
-        FDM["Poisson_solver_2d/3d<br/>(FDM)"]
+        FDM["Poisson_solver_1d/2d/3d<br/>(FDM)"]
         FEM["FEM_Poisson_solver_2d<br/>(FEM)"]
         MPG["MPG_Poisson_solver_2d<br/>(FEM)"]
     end
@@ -47,12 +47,22 @@ graph TB
     subgraph Backends["后端实现"]
         BE1["eigen_sparselu_cpu<br/>CPU直接法"]
         BE2["eigen_multigrid_cpu<br/>CPU迭代法"]
-        BE3["cuda_sparselu_gpu<br/>GPU直接法"]
+        BE3["eigen_schurcomplement_cpu<br/>CPU分块直接法"]
+        BE4["cuda_sparselu_gpu<br/>GPU直接法"]
+        BE5["cuda_schurcomplement_gpu<br/>GPU分块直接法"]
+        BE6["cuda_multigrid_gpu<br/>GPU迭代法"]
+        BE7["sycl_multigrid_gpu<br/>SYCL迭代法"]
+        BE8["sycl_multigrid32f_gpu<br/>SYCL迭代法(混合精度)"]
     end
 
     Backend --> BE1
     Backend --> BE2
     Backend --> BE3
+    Backend --> BE4
+    Backend --> BE5
+    Backend --> BE6
+    Backend --> BE7
+    Backend --> BE8
 ```
 
 #### 前端与后端的交互流程
@@ -426,23 +436,35 @@ static int _ = []() {
 ```
 src/field_solver/
 ├── register/
-│   ├── interface.h          # C ABI 接口定义
-│   └── registry.cpp         # 注册表实现
-├── backend.hpp              # solver_backend C++ 封装类
+│   ├── interface.h                     # C ABI 接口定义
+│   └── registry.cpp                    # 注册表实现
+├── backend.hpp                         # solver_backend C++ 封装类
 ├── implements/
-│   ├── eigen_sparselu_cpu.cpp
-│   ├── eigen_multigrid_cpu.cpp
-│   ├── cuda_sparselu_gpu.cu
-│   └── multigrid/           # 多重网格求解器相关算法
-└── makefile                 # 编译规则
+│   ├── eigen_sparselu_cpu.cpp          # CPU 稀疏 LU 直接法后端
+│   ├── eigen_multigrid_cpu.cpp         # CPU 多重网格迭代法后端
+│   ├── eigen_schurcomplement_cpu.cpp   # CPU 分块 Schur 补后端
+│   ├── cuda_sparselu_gpu.cu            # GPU 稀疏 LU 直接法后端
+│   ├── cuda_schurcomplement_gpu.cu     # GPU 分块 Schur 补后端
+│   ├── cuda_multigrid_gpu.cu           # GPU 多重网格迭代法后端
+│   ├── sycl_multigrid_gpu.cpp          # SYCL 多重网格后端 (double)
+│   ├── sycl_multigrid32f_gpu.cpp       # SYCL 多重网格后端 (混合精度)
+│   ├── cuda_sparse_lu_common.cuh       # CUDA LU 后端公共实现
+│   ├── umfpack_lu_decompose.hpp        # UMFPACK LU 分解封装
+│   ├── multigrid/                      # 多重网格求解器相关算法
+│   └── schur_complement/               # Schur 补求解器相关算法
+└── makefile                            # 编译规则
 
 编译产物：
 src/field_solver/bin/
 ├── registry.o               # 注册表
 ├── eigen_sparselu_cpu.o     # 各后端目标文件
 ├── eigen_multigrid_cpu.o
+├── eigen_schurcomplement_cpu.o
 ├── cuda_sparselu_gpu.o
-├── ...
+├── cuda_schurcomplement_gpu.o
+├── cuda_multigrid_gpu.o
+├── sycl_multigrid_gpu.o
+├── sycl_multigrid32f_gpu.o
 └── impls.o                  # 所有后端合并后的目标文件
 ```
 
@@ -516,7 +538,12 @@ PSuM 内置的 native 求解器及部分后端实现：
 
 | 后端名 | 文件 | 特点 | 适用场景 |
 |--------|------|------|---------|
-| `native` | 内置于前端 | 2D: SparseLU 直接法；3D: BiCGSTAB 迭代法 | 小规模问题、调试 |
+| `native` | 内置于前端 | 1D/2D: SparseLU 直接法；3D: BiCGSTAB 迭代法 | 小规模问题、调试 |
 | `eigen_sparselu_cpu` | `implements/eigen_sparselu_cpu.cpp` | CPU 稀疏 LU 直接法 | 中小规模、高精度 |
-| `eigen_multigrid_cpu` | `implements/eigen_multigrid_cpu.cpp` | CPU 多重网格迭代法 | 大规模问题、快速求解 |
-| `cuda_sparselu_gpu` | `implements/cuda_sparselu_gpu.cu` | GPU 稀疏 LU（cuSPARSE + UMFPACK） | GPU 加速、大规模 |
+| `eigen_multigrid_cpu` | `implements/eigen_multigrid_cpu.cpp` | CPU 多重网格迭代法 | 结构化中大规模问题 |
+| `eigen_schurcomplement_cpu` | `implements/eigen_schurcomplement_cpu.cpp` | CPU 分块 Schur 补方法 | 结构化大规模二维问题、分解可复用 |
+| `cuda_sparselu_gpu` | `implements/cuda_sparselu_gpu.cu` | GPU 稀疏 LU（cuSPARSE + UMFPACK） | GPU 加速、中大规模二维问题 |
+| `cuda_schurcomplement_gpu` | `implements/cuda_schurcomplement_gpu.cu` | GPU 分块 Schur 补方法 | GPU 加速、结构化大规模二维问题 |
+| `cuda_multigrid_gpu` | `implements/cuda_multigrid_gpu.cu` | GPU 多重网格迭代法 | GPU 加速、结构化大规模 |
+| `sycl_multigrid_gpu` | `implements/sycl_multigrid_gpu.cpp` | SYCL 多重网格迭代法 | SYCL GPU 加速、结构化大规模 |
+| `sycl_multigrid32f_gpu` | `implements/sycl_multigrid32f_gpu.cpp` | SYCL 多重网格迭代法，最外层双精度计算残差、单精度计算矫正向量 | SYCL GPU 加速、结构化大规模 |

@@ -19,5 +19,5 @@ PSuM documentation is organized into three layers by reading depth. For first-ti
 ### 3. Understanding the Background & Contributing
 
 - [Framework Design](design_en.md): Design notes for contributors and advanced users.
-- `docs/detailed_design/`: Detailed design documents for complex modules, such as solver backends.
+- `docs/detailed_design/`: Detailed design documents for complex modules, such as solver backends, serialization and compression.
 - [Code Style](coding-style_en.md): Recommended reading before contributing to development.

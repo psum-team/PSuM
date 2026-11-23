@@ -16,11 +16,11 @@ PSuM provides three types of frontend solvers for different grid types and appli
 
 | Frontend Solver | Grid Type | Discretization Method | Applicable Scenarios |
 |-----------|---------|---------|---------|
-| `Poisson_solver_2d/3d` | `simple_grid<2/3>` | Staggered-grid finite difference (FDM) | Structured grids, 2D/3D |
+| `Poisson_solver_1d/2d/3d` | `simple_grid<1/2/3>` | Finite volume | Structured grids, 1D/2D/3D |
 | `FEM_Poisson_solver_2d` | `tri_mesh` | Finite element (FEM) | Unstructured triangular meshes |
 | `MPG_Poisson_solver_2d` | `multi_patch_grid<2>` | Finite element (FEM) | Multi-resolution grids, FEM-based solver |
 
-Additional frontend solvers such as FEM_3D/MPG_3D/Maxwell_solver_3d will be implemented in the future.
+The frontend solvers of the current version are exactly those listed in the table above; additional frontend solvers such as FEM_3D/MPG_3D/Maxwell_solver_3d are expected in future versions.
 The discretization method and the problem being solved by a frontend solver are not assumable, but they interact with the backend through a finite set of interfaces.
 
 #### Overall Architecture Diagram
@@ -30,7 +30,7 @@ The discretization method and the problem being solved by a frontend solver are 
 ```mermaid
 graph TB
     subgraph Frontend["Frontend Solver Layer"]
-        FDM["Poisson_solver_2d/3d<br/>(FDM)"]
+        FDM["Poisson_solver_1d/2d/3d<br/>(FDM)"]
         FEM["FEM_Poisson_solver_2d<br/>(FEM)"]
         MPG["MPG_Poisson_solver_2d<br/>(FEM)"]
     end
@@ -48,12 +48,22 @@ graph TB
     subgraph Backends["Backend Implementations"]
         BE1["eigen_sparselu_cpu<br/>CPU Direct Method"]
         BE2["eigen_multigrid_cpu<br/>CPU Iterative Method"]
-        BE3["cuda_sparselu_gpu<br/>GPU Direct Method"]
+        BE3["eigen_schurcomplement_cpu<br/>CPU Block Direct Method"]
+        BE4["cuda_sparselu_gpu<br/>GPU Direct Method"]
+        BE5["cuda_schurcomplement_gpu<br/>GPU Block Direct Method"]
+        BE6["cuda_multigrid_gpu<br/>GPU Iterative Method"]
+        BE7["sycl_multigrid_gpu<br/>SYCL Iterative Method"]
+        BE8["sycl_multigrid32f_gpu<br/>SYCL Iterative Method (mixed precision)"]
     end
 
     Backend --> BE1
     Backend --> BE2
     Backend --> BE3
+    Backend --> BE4
+    Backend --> BE5
+    Backend --> BE6
+    Backend --> BE7
+    Backend --> BE8
 ```
 
 #### Frontend-Backend Interaction Flow
@@ -427,23 +437,35 @@ Here, `platform` is the name of the primary software dependency, such as `cuda`,
 ```
 src/field_solver/
 ├── register/
-│   ├── interface.h          # C ABI interface definitions
-│   └── registry.cpp         # Registry implementation
-├── backend.hpp              # solver_backend C++ wrapper class
+│   ├── interface.h                     # C ABI interface definitions
+│   └── registry.cpp                    # Registry implementation
+├── backend.hpp                         # solver_backend C++ wrapper class
 ├── implements/
-│   ├── eigen_sparselu_cpu.cpp
-│   ├── eigen_multigrid_cpu.cpp
-│   ├── cuda_sparselu_gpu.cu
-│   └── multigrid/           # Multigrid solver related algorithms
-└── makefile                 # Build rules
+│   ├── eigen_sparselu_cpu.cpp          # CPU sparse LU direct backend
+│   ├── eigen_multigrid_cpu.cpp         # CPU multigrid iterative backend
+│   ├── eigen_schurcomplement_cpu.cpp   # CPU block Schur complement backend
+│   ├── cuda_sparselu_gpu.cu            # GPU sparse LU direct backend
+│   ├── cuda_schurcomplement_gpu.cu     # GPU block Schur complement backend
+│   ├── cuda_multigrid_gpu.cu           # GPU multigrid iterative backend
+│   ├── sycl_multigrid_gpu.cpp          # SYCL multigrid backend (double)
+│   ├── sycl_multigrid32f_gpu.cpp       # SYCL multigrid backend (mixed precision)
+│   ├── cuda_sparse_lu_common.cuh       # common implementation for CUDA LU backends
+│   ├── umfpack_lu_decompose.hpp        # UMFPACK LU factorization wrapper
+│   ├── multigrid/                      # Multigrid solver related algorithms
+│   └── schur_complement/               # Schur complement solver related algorithms
+└── makefile                            # Build rules
 
 Build artifacts:
 src/field_solver/bin/
 ├── registry.o               # Registry
 ├── eigen_sparselu_cpu.o     # Individual backend object files
 ├── eigen_multigrid_cpu.o
+├── eigen_schurcomplement_cpu.o
 ├── cuda_sparselu_gpu.o
-├── ...
+├── cuda_schurcomplement_gpu.o
+├── cuda_multigrid_gpu.o
+├── sycl_multigrid_gpu.o
+├── sycl_multigrid32f_gpu.o
 └── impls.o                  # Merged object file of all backends
 ```
 
@@ -517,7 +539,12 @@ PSuM's built-in native solvers and some backend implementations:
 
 | Backend Name | File | Characteristics | Applicable Scenarios |
 |--------|------|------|---------|
-| `native` | Built into frontend | 2D: SparseLU direct method; 3D: BiCGSTAB iterative method | Small-scale problems, debugging |
+| `native` | Built into frontend | 1D/2D: SparseLU direct method; 3D: BiCGSTAB iterative method | Small-scale problems, debugging |
 | `eigen_sparselu_cpu` | `implements/eigen_sparselu_cpu.cpp` | CPU sparse LU direct method | Small to medium scale, high precision |
-| `eigen_multigrid_cpu` | `implements/eigen_multigrid_cpu.cpp` | CPU multigrid iterative method | Large-scale problems, fast solving |
-| `cuda_sparselu_gpu` | `implements/cuda_sparselu_gpu.cu` | GPU sparse LU (cuSPARSE + UMFPACK) | GPU acceleration, large-scale |
+| `eigen_multigrid_cpu` | `implements/eigen_multigrid_cpu.cpp` | CPU multigrid iterative method | Structured medium-to-large-scale problems |
+| `eigen_schurcomplement_cpu` | `implements/eigen_schurcomplement_cpu.cpp` | CPU block Schur complement method | Structured large-scale 2D problems, reusable factorization |
+| `cuda_sparselu_gpu` | `implements/cuda_sparselu_gpu.cu` | GPU sparse LU (cuSPARSE + UMFPACK) | GPU acceleration, medium-to-large-scale 2D problems |
+| `cuda_schurcomplement_gpu` | `implements/cuda_schurcomplement_gpu.cu` | GPU block Schur complement method | GPU acceleration, structured large-scale 2D problems |
+| `cuda_multigrid_gpu` | `implements/cuda_multigrid_gpu.cu` | GPU multigrid iterative method | GPU acceleration, structured large scale |
+| `sycl_multigrid_gpu` | `implements/sycl_multigrid_gpu.cpp` | SYCL multigrid iterative method | SYCL GPU acceleration, structured large scale |
+| `sycl_multigrid32f_gpu` | `implements/sycl_multigrid32f_gpu.cpp` | SYCL multigrid iterative method; the outermost layer computes residuals in double precision and correction vectors in single precision | SYCL GPU acceleration, structured large scale |

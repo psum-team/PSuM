@@ -73,9 +73,10 @@ source env_load.sh
 - 编译器设置: `CXX`, `NVCC`, `ACPP`
 - 功能开关: `USE_EIGEN`, `USE_UMFPACK`, `USE_CUDA` (0=禁用, 1=启用)
 - CUDA 架构: `CUDA_ARCH` (默认 sm_75)
-- 后端选择: `USE_CUDA_SPARSELU_GPU`, `USE_EIGEN_SPARSELU_CPU`
+- 后端选择: `USE_CUDA_SPARSELU_GPU`, `USE_EIGEN_SPARSELU_CPU`,  `USE_CUDA_SCHURCOMPLEMENT_GPU`等
+- 压缩库: `USE_COMPRESSION`（指向 `src/serialization/bin/lzma_vendor.o`，默认开启）
 - 通用编译选项: `-O3 -std=c++20`
-- 库链接: CUDA, UMFPACK, Eigen 相关库
+- 库链接: CUDA, UMFPACK, Eigen 相关库, LZMA 压缩对象
 
 用户可以在此看到默认配置，并根据需要，**在 `config.mk.local` 中覆盖设置**。
 
