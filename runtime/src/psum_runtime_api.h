@@ -3,10 +3,30 @@
 
 #include <stddef.h>   /* size_t */
 
+/* The code of every int-returning port: one system from the managers to here,
+ * with the functions that decode it. */
+#include "status.hpp"
+
+/* Object descriptors: one header per descriptor family. Each is valid C.
+ * Included here so that this remains the single entry point of the C
+ * interface. */
+#include "desc/grid_desc.hpp"
+#include "desc/field_desc.hpp"
+#include "desc/species_desc.hpp"
+
 /* C interface of the PSuM runtime. Including object-manager, I/O and PIC algorithm calls.
  * The universe (a series of compile configuration, see universe.hpp) will determine the ability closure but will not effect the runtime API. */
 
 typedef struct psum_engine_handle* psum_engine_t;
+
+/* The most recent failed call on an engine, in more than its code. Filled by
+ * psum_engine_last_error; meaningful once a port has returned a non-zero code. */
+typedef struct psum_error {
+    int status;                /* the code that call returned */
+    int segment;               /* the family that reported it: a PSUM_SEGMENT_* value */
+    char name[64];             /* the object it concerns; "" when none is known */
+    char message[192];         /* the same, in words */
+} psum_error;
 
 /* runtime universe introspection (out): scalars as 0=double / 1=float, the switches as 0/1 */
 typedef struct psum_universe_info {
@@ -15,7 +35,7 @@ typedef struct psum_universe_info {
     int vel_scalar;
     int e_order;
     int b_order;
-    int periodic_grid;
+    int auto_wrap;               /* 1: positions wrap automatically (see AutoWrap) */
     int enable_float_fields;
 } psum_universe_info;
 
@@ -43,41 +63,25 @@ enum { PSUM_SCALAR_DOUBLE = 0, PSUM_SCALAR_FLOAT = 1 };
 
 psum_engine_t psum_engine_create(void);
 
-// ---------- descriptor structs -------------------
+/* out = the most recent failure of this engine; all zeroes when none failed */
+int psum_engine_last_error(psum_engine_t engine, psum_error* out);
 
-typedef struct psum_grid_desc {
-    const char* name;
-    int dim;                     /* 1..3 */
-    const double* lower;         /* dim doubles */
-    const double* upper;         /* dim doubles */
-    const int* node_count;       /* dim ints, CELLS per axis */
-} psum_grid_desc;
-
-typedef struct psum_field_desc {
-    const char* name;
-    const char* grid;
-    int quantity_size;           /* 1..3 (1d: 1 only) */
-    int scalar_kind;             /* PSUM_SCALAR_DOUBLE / _FLOAT (float needs a universe built with PSUM_ENABLE_FLOAT_FIELDS) */
-} psum_field_desc;
-
-typedef struct psum_particles_desc {
-    const char* group;
-} psum_particles_desc;
+// ---------- operator descriptors and query structs -------------------
 
 /* one leapfrog step (E-only kick + drift), runtime-fused deposit */
-typedef struct psum_leapfrog_desc {
-    const char* group;
+typedef struct psum_opt_leapfrog_desc {
+    const char* species;
     const char* e_field;
     int e_id;                    /* strategy id, see PSUM_E_* */
     double q_m;
     double dt;
     const char* deposit_field;   /* NULL: no deposit (gate uses e_field grid) */
     double deposit_weight;
-} psum_leapfrog_desc;
+} psum_opt_leapfrog_desc;
 
 /* one boris step (E + B rotation), runtime-fused deposit */
-typedef struct psum_boris_desc {
-    const char* group;
+typedef struct psum_opt_boris_desc {
+    const char* species;
     const char* e_field;
     const char* b_field;
     int e_id;
@@ -86,24 +90,24 @@ typedef struct psum_boris_desc {
     double dt;
     const char* deposit_field;   /* NULL: no deposit (gate uses e_field grid) */
     double deposit_weight;
-} psum_boris_desc;
+} psum_opt_boris_desc;
 
 /* free flight (x += v dt); deposit (and its gate) only with a field */
-typedef struct psum_drift_desc {
-    const char* group;
+typedef struct psum_opt_drift_desc {
+    const char* species;
     double dt;
     int e_id;                    /* deposit mapping */
     const char* deposit_field;   /* NULL: plain drift, no gate */
     double deposit_weight;
-} psum_drift_desc;
+} psum_opt_drift_desc;
 
-/* standalone deposit of a whole group onto a scalar field */
-typedef struct psum_deposit_desc {
-    const char* group;
+/* standalone deposit of a whole species onto a scalar field */
+typedef struct psum_opt_deposit_desc {
+    const char* species;
     const char* field;
     int e_id;
     double weight;
-} psum_deposit_desc;
+} psum_opt_deposit_desc;
 
 /* read-back arrays; pass pos/vel NULL to query shapes only */
 typedef struct psum_readback {
@@ -114,7 +118,7 @@ typedef struct psum_readback {
 } psum_readback;
 
 /* a poisson slot setup */
-typedef struct psum_poisson_desc {
+typedef struct psum_opt_poisson_desc {
     int solver_kind;             /* PSUM_POISSON_1D / 2D_CARTESIAN / ... */
     const int* bc_kinds;         /* 2*dim entries, PSUM_BC_* */
     const double* robin_center;  /* dim doubles, Robin only */
@@ -122,7 +126,7 @@ typedef struct psum_poisson_desc {
     const char* backend;         /* NULL/"" = native */
     const char* options;         /* NULL/"" = defaults */
     double epsilon;
-} psum_poisson_desc;
+} psum_opt_poisson_desc;
 
 /* shape of one field, filled by the runtime */
 typedef struct psum_field_shape {
@@ -135,34 +139,49 @@ typedef struct psum_field_shape {
 
 int psum_engine_destroy(psum_engine_t engine);
 
-int psum_engine_grid_create(psum_engine_t engine, const psum_grid_desc* grid);
+int psum_engine_grid_create(psum_engine_t engine, psum_obj_grid_desc* grid);
 
 /* scalar_kind: PSUM_SCALAR_DOUBLE or PSUM_SCALAR_FLOAT */
-int psum_engine_field_create(psum_engine_t engine, const psum_field_desc* field);
+int psum_engine_field_create(psum_engine_t engine, psum_obj_field_desc* field,
+                             const char* grid_name);
 
 int psum_engine_field_fill(psum_engine_t engine, const char* name, double value);
 
-int psum_engine_particles_create(psum_engine_t engine, const char* name, int dim);
+int psum_engine_particles_create(psum_engine_t engine, psum_obj_species_desc* species);
+
+/* create from name + necessary parameters and RETURN an authentic desc */
+int psum_engine_field_create_on_grid(psum_engine_t engine,
+                                     const char* field_name, const char* grid_name,
+                                     int quantity_size, int scalar_kind, int on_device,
+                                     psum_obj_field_desc* out);
+/* typed desc query: decide existence and fill invariants of the named
+ * object; NOT_FOUND, reported by the family's segment, when absent. */
+int psum_engine_grid_desc_get(psum_engine_t engine, const char* name, psum_obj_grid_desc* out);
+
+/* report { name + invariant } of a created object back into its descriptor
+ * (python-side object model: create -> query -> identical). */
+int psum_engine_species_desc_get(psum_engine_t engine, const char* name, psum_obj_species_desc* out);
+int psum_engine_field_desc_get(psum_engine_t engine, const char* name, psum_obj_field_desc* out);
 
 /* pos/vel point to `dim` doubles each (dim as given at creation). */
 int psum_engine_particles_append(psum_engine_t engine, const char* name, const double* pos, const double* vel);
 
 /* batch append: pos/vel each hold dim*count doubles, one upload + insert */
-int psum_engine_particles_append_n(psum_engine_t engine, const psum_particles_desc* batch,
+int psum_engine_particles_append_n(psum_engine_t engine, const char* name,
                                    size_t count, const double* pos, const double* vel);
 
 /* batch append + deposit in one shot */
-int psum_engine_particles_append_deposit(psum_engine_t engine, const psum_particles_desc* batch,
+int psum_engine_particles_append_deposit(psum_engine_t engine, const char* name,
                                          size_t count, const double* pos, const double* vel,
                                          const char* deposit_field, int e_id, double weight,
                                          size_t* accepted);
 
 int psum_engine_particles_count(psum_engine_t engine, const char* name, size_t* count);
 
-/* compacts the group: lazily deleted (invalid) slots are removed */
+/* compacts the species: lazily deleted (invalid) slots are removed */
 int psum_engine_particles_compress(psum_engine_t engine, const char* name);
 
-int psum_engine_leave_buffer_get(psum_engine_t engine, const char* group, psum_readback* out);
+int psum_engine_leave_buffer_get(psum_engine_t engine, const char* species, psum_readback* out);
 
 /* shape queries so callers can size buffers exactly */
 int psum_engine_particles_size(psum_engine_t engine, const char* name, size_t* count, int* dim);
@@ -172,8 +191,8 @@ int psum_engine_host_field_shape(psum_engine_t engine, const char* name, psum_fi
 
 int psum_engine_particles_get(psum_engine_t engine, const char* name, size_t index, double* pos, double* vel);
 
-/* bulk read-back: pos/vel each hold dim*valid_count doubles (size them
- * with psum_particles_size); valid particles packed in order */
+/* bulk read-back: pos/vel each hold dim*valid_count doubles;
+ * valid particles packed in order */
 int psum_engine_particles_get_all(psum_engine_t engine, const char* name, double* pos, double* vel);
 
 /* in-place += value on every node (background charge & friends) */
@@ -183,12 +202,12 @@ int psum_engine_host_field_add(psum_engine_t engine, const char* name, double va
 int psum_engine_field_add_field(psum_engine_t engine, const char* dst, const char* src);
 int psum_engine_host_field_add_field(psum_engine_t engine, const char* dst, const char* src);
 
-int psum_engine_poisson_init(psum_engine_t engine, const psum_poisson_desc* poisson);
+int psum_engine_poisson_init(psum_engine_t engine, const psum_opt_poisson_desc* poisson);
 
 int psum_engine_poisson_bc_value(psum_engine_t engine, int solver_kind, int boundary_index, double value);
 
 /* solves rho -> phi; device flavor takes device scalar fields (data
- * pointers straight into the solver: needs a device-capable backend) */
+ * pointers straight into the solver) */
 int psum_engine_poisson_solve_d(psum_engine_t engine, int solver_kind, const char* rho_name, const char* phi_name);
 
 /* host flavor takes HOST scalar fields (needs a host backend) */
@@ -196,21 +215,20 @@ int psum_engine_poisson_solve_h(psum_engine_t engine, int solver_kind, const cha
 
 /* host scalar fields (QS=1) for the host solve flavor */
 /* host fields mirror the device window (qs per dimension, scalar kind) */
-int psum_engine_host_field_create(psum_engine_t engine, const psum_field_desc* field);
 int psum_engine_host_field_fill(psum_engine_t engine, const char* name, double value);
 int psum_engine_host_field_get_node(psum_engine_t engine, const char* name, const int* node_indices, double* value);
 
 /* drift: the free-flight operator (x += v dt) for every particle */
-int psum_engine_drift(psum_engine_t engine, const psum_drift_desc* drift);
+int psum_engine_drift(psum_engine_t engine, const psum_opt_drift_desc* drift);
 
-/* one leapfrog step (E-only kick + drift) for every particle in chosen group. */
-int psum_engine_leapfrog(psum_engine_t engine, const psum_leapfrog_desc* push);
+/* one leapfrog step (E-only kick + drift) for every particle in the chosen species. */
+int psum_engine_leapfrog(psum_engine_t engine, const psum_opt_leapfrog_desc* push);
 
 /* one Boris step (rotation + drift); deposit parameters as above */
-int psum_engine_boris(psum_engine_t engine, const psum_boris_desc* boris);
+int psum_engine_boris(psum_engine_t engine, const psum_opt_boris_desc* boris);
 
-/* adds weight x charge of every particle onto the scalar field; mapping and order from e_strategy_id). */
-int psum_engine_deposit(psum_engine_t engine, const psum_deposit_desc* deposit);
+/* adds weight x charge of every particle onto the scalar field. */
+int psum_engine_deposit(psum_engine_t engine, const psum_opt_deposit_desc* deposit);
 
 /* one node value of a field; indices has one entry per grid dimension, range-checked */
 int psum_engine_field_get_node(psum_engine_t engine, const char* name, const int* node_indices, double* value);
@@ -222,14 +240,14 @@ int psum_engine_host_field_zero(psum_engine_t engine, const char* name);
 /* deposited charge -> density: v *= scale / cell measure */
 int psum_engine_deposit_to_density(psum_engine_t engine, const char* name, int geometry, double scale);
 
-/* same grid dim, same QS, same side: copies with double<->float conversion
+/* same grid dim, same QS: copies with double<->float conversion
  * (either direction; identical scalars also fine) */
 int psum_engine_field_copy(psum_engine_t engine, const char* dst_name, const char* src_name);
 int psum_engine_host_field_copy(psum_engine_t engine, const char* dst_name, const char* src_name);
 
-/* save one object (group / device field / host field) into a named .mas
+/* save one object (species / device field / host field) into a named .mas
  * archive (replace mode) */
-int psum_engine_group_save_mas(psum_engine_t engine, const char* group, const char* file);
+int psum_engine_species_save_mas(psum_engine_t engine, const char* species, const char* file);
 int psum_engine_field_save_mas(psum_engine_t engine, const char* field, const char* file);
 int psum_engine_host_field_save_mas(psum_engine_t engine, const char* field, const char* file);
 

@@ -5,10 +5,10 @@
 //   PosScalar / VelScalar   position and velocity scalars (may differ)
 //   EOrder / BOrder         interpolation orders in push kernels
 //   DimMask                 which particle dims are supported (1d/2d/3d)
-//   PeriodicGrid            whether the grid is periodic (affects auto wrapping of particle positions)
+//   AutoWrap                whether particle positions wrap around automatically
 //   EnableFloatFields       whether float fields are supported (default: no)
 //   ExtraBindings           particle property bindings beyond pos/vel
-// The library-wide defaults come from compile definitions (psum_runtime_api.h).
+// The library-wide defaults come from compile definitions.
 
 #include <psum/psum.hpp>
 
@@ -17,12 +17,12 @@ namespace psum_runtime {
     using namespace psum::prelude;
     namespace pt = psum::property;
 
-    template <typename PosScalar, typename VelScalar, int EOrder, int BOrder, int DimMask, bool PeriodicGrid, bool EnableFloatFields,
+    template <typename PosScalar, typename VelScalar, int EOrder, int BOrder, int DimMask, bool AutoWrap, bool EnableFloatFields,
               typename... ExtraBindings>
     struct psum_universe {
         static constexpr int e_order = EOrder;
         static constexpr int b_order = BOrder;
-        static constexpr bool periodic_grid = PeriodicGrid;
+        static constexpr bool auto_wrap = AutoWrap;
         // enable-float-fields: FIELDS only. When off (default) the field create/dispatch layers carry double fields only.
         static constexpr bool enable_float_fields = EnableFloatFields;
         // dim mask: which particle/grid dims this build supports.
@@ -39,9 +39,6 @@ namespace psum_runtime {
             psum::tag::tag_bind<pt::velocity, Eigen::Vector<VelScalar, Dim>>,
             ExtraBindings...>;
         
-        template <int Dim>
-        using group = psum::particle_container::particle_group<
-            particle<Dim>, psum::particle_container::pos_x_nan_is_invalid>;
     };
 
     // Use compile-time definitions to configure the universe.
@@ -61,8 +58,8 @@ namespace psum_runtime {
     #ifndef PSUM_DIM_MASK
     #define PSUM_DIM_MASK 8
     #endif
-    #ifndef PSUM_PERIODIC_GRID
-    #define PSUM_PERIODIC_GRID 0
+    #ifndef PSUM_AUTO_WRAP
+    #define PSUM_AUTO_WRAP 0
     #endif
     #ifndef PSUM_ENABLE_FLOAT_FIELDS
     #define PSUM_ENABLE_FLOAT_FIELDS 0
@@ -71,7 +68,7 @@ namespace psum_runtime {
     // configured_universe is the universe used for psum_engine and the runtime API. It is configured at compile time via the PSUM_* macros above.
     using configured_universe =
         psum_universe<PSUM_POS_SCALAR, PSUM_VEL_SCALAR, PSUM_E_ORDER, PSUM_B_ORDER,
-                      PSUM_DIM_MASK, PSUM_PERIODIC_GRID != 0,
+                      PSUM_DIM_MASK, PSUM_AUTO_WRAP != 0,
                       PSUM_ENABLE_FLOAT_FIELDS != 0>;
     static_assert(PSUM_DIM_MASK >= 1 && PSUM_DIM_MASK <= 8,
                   "PSUM_DIM_MASK must be in 1..8 (8 = all dims, 1..7 bitmask)");

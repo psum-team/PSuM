@@ -139,9 +139,6 @@ namespace poisson {
         }
         if ((dim == 1 && s.s1) || (dim == 2 && s.s2) || (dim == 3 && s.s3))
             return -2;   // one init per slot, no re-initialization
-        // a backend that is not registered in this build (e.g. the gpu
-        // multigrids in a gpu-less build) makes solver_backend throw —
-        // surface it as an error code so callers can degrade gracefully
         try {
         switch (dim) {
         case 1: {
@@ -255,8 +252,7 @@ namespace poisson {
         return 0;
     }
 
-    // device flavor: device field data pointers straight into the
-    // solver (requires a device-capable backend chosen at init)
+    // device flavor: device field data pointers straight into the solver
     template <typename Mng>
     int solve_d(Mng& mng, slots& s, int solver_kind,
                 const char* rho_name, const char* phi_name) {

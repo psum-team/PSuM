@@ -1,4 +1,4 @@
-// Poisson probes straight against poisson.hpp — no engine, no libcapi,
+// Poisson probes straight against poisson.hpp — no engine,
 // mirroring test_push_variant: raw grids + fields + solver slots.
 // Every case has an analytic anchor; solver_kind/bc values follow
 // psum_runtime_api.h (0 periodic, 1 dirichlet, 2 robin, 3 neumann).
@@ -46,8 +46,7 @@ int main() {
         check(solve_h(mng, s, 0, "rho", "phi"), "P1 solve");
         expect("P1 1d linear mid", mid_of(phi, 32), 50.0);
     }
-    {   // P2: 1d constant source, epsilon pass-through: eps=1 -> mid=25,
-        //     and (eps=2, rho=4) -> the same phi (linearity in rho/eps)
+    {   // P2: 1d constant source, epsilon pass-through: eps=1 -> mid=25
         serialization::object_manager mng{"", q};
         mng.obj<grid1>("g") = grid1({0.0}, {10.0}, {64});
         host_field1<1>& rho = mng.obj<host_field1<1>>("rho") = host_field1<1>(mng.obj<grid1>("g"));

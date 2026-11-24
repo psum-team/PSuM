@@ -12,6 +12,8 @@
 
 namespace psum_runtime {
 
+    namespace pt = psum::property;   // this header stands on its own
+
 namespace particle_operation_dispatch {
 
     using namespace psum::prelude;
@@ -62,9 +64,9 @@ namespace particle_operation_dispatch {
     using particle_t = typename Universe::template particle<Dim>;
 
     // deposit gate, evaluated before the deposit call.
-    // Cartesian + periodic universe — wrap the coordinate modulo span+del per grid dimension 
+    // Auto-wrap universe — wrap the coordinate modulo span+del per grid dimension 
     // into the half-cell extended domain [lo-del/2, hi+del/2);
-    // Otherwise (axisymmetric map, or a non-periodic universe) — test against the plain deposit 
+    // Otherwise (axisymmetric map, or no auto wrap) — test against the plain deposit 
     // grid, closed bounds; a particle outside is invalid and skips the deposit.
     // Everything the in-kernel gate needs is computed outside the kernel and passed in as the following struct.
     template <int GDim>
@@ -90,17 +92,17 @@ namespace particle_operation_dispatch {
         return b;
     }
 
-    // the departure log for a group: a device_vector<Particle> under
-    // "<group>_leave_buffer". Every kernel that may make_invalid
+    // the departure log for a species: a device_vector<Particle> under
+    // "<species>_leave_buffer". Every kernel that may make_invalid
     // refreshes it before launch (content of the previous launch is
     // dropped) and doomed particles are push_back'd BEFORE they are
     // invalidated.
     template <typename Universe, int Dim, typename Group>
     psum::particle_container::device_vector<typename Group::value_type>&
-    leave_buffer_of(serialization::object_manager& mng, Group& grp, const char* group_name) {
+    leave_buffer_of(serialization::object_manager& mng, Group& grp, const char* species_name) {
         using part_t = typename Group::value_type;
         using vec_t = psum::particle_container::device_vector<typename Group::value_type>;
-        auto& lv = mng.template obj<vec_t>(std::string(group_name) + "_leave_buffer");
+        auto& lv = mng.template obj<vec_t>(std::string(species_name) + "_leave_buffer");
         lv.reserve(std::max(grp.size() / 5, (size_t)1024));
         lv.clear();   // the previous launch's content is discarded
         return lv;
@@ -108,11 +110,11 @@ namespace particle_operation_dispatch {
 
     template <typename Universe, int Dim>
     using leave_acc_t = psum::particle_container::device_vector_acc<
-        typename Universe::template group<Dim>::value_type>;
+        typename Universe::template particle<Dim>>;
 
     // true = may deposit; false = was invalidated (and must be skipped).
-    template <int Id, typename Universe, int Dim, int GDim>
-    bool deposit_allowed(typename Universe::template group<Dim>::value_type& p,
+    template <typename Validator, int Id, typename Universe, int Dim, int GDim>
+    bool deposit_allowed(typename Universe::template particle<Dim>& p,
                             const ingrid_bounds<GDim>& b,
                             const leave_acc_t<Universe, Dim>* leave) {
         constexpr bool axi = std::is_same_v<e_map_at<Id>, axisymmetricMap>;
@@ -124,7 +126,7 @@ namespace particle_operation_dispatch {
         }();
         bool inside = true;
         for (int i = 0; i < GDim; i++) {
-            if constexpr (Universe::periodic_grid && !axi) {
+            if constexpr (Universe::auto_wrap && !axi) {
                 while (xc[i] < b.a[i]) xc[i] += b.period[i];
                 while (xc[i] >= b.end[i]) xc[i] -= b.period[i];
                 x[i] = xc[i];
@@ -134,7 +136,7 @@ namespace particle_operation_dispatch {
         }
         if (!inside) {
             if (leave) leave->push_back(p);   // record, then invalidate
-            Universe::template group<Dim>::validator::make_invalid(p);
+            Validator::make_invalid(p);
         }
         return inside;
     }
@@ -159,12 +161,12 @@ namespace particle_operation_dispatch {
     // With a deposit field it is the shared arm shape; without one the
     // plain x += v dt kernel runs (no gate: there is no grid to test).
     template <typename Universe, int Dim, typename Group>
-    int drift_one(serialization::object_manager& mng, const char* group_name,
+    int drift_one(serialization::object_manager& mng, const char* species_name,
                     Group& grp,
                     int e_id, double dt,
                     const char* deposit_name, double deposit_weight) {
         using part_t = typename Group::value_type;
-        auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, group_name);
+        auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, species_name);
         auto run = [&](auto& df, bool want_dep) {
             using DF = std::remove_cvref_t<decltype(df)>;
             constexpr int GDim = DF::Dimension;
@@ -179,7 +181,7 @@ namespace particle_operation_dispatch {
                 return [=](part_t& p) {                                           \
                     particle_operation::drift(p, dt);                             \
                     if (want_dep &&                                               \
-                        deposit_allowed<i, Universe, Dim>(p, bnd, &lv_acc))       \
+                        deposit_allowed<typename Group::validator, i, Universe, Dim>(p, bnd, &lv_acc))       \
                         particle_operation::deposit<e_strategy_at<i, Universe::e_order>>( \
                             p, acc, deposit_weight);                              \
                 };                                                                \
@@ -217,9 +219,9 @@ namespace particle_operation_dispatch {
     // ---------- batch append + deposit: candidates are gated first —
     // survivors are deposited and appended with a single insert;
     // rejects are NOT recorded in the leave buffer (they never entered
-    // the group; the caller holds the data and the accepted count)
+    // the species; the caller holds the data and the accepted count)
     template <typename Universe, int Dim, typename Group, typename DField>
-    int inject_batch(serialization::object_manager& mng, const char* group_name,
+    int inject_batch(serialization::object_manager& mng, const char* species_name,
                         Group& grp,
                         DField& f, int e_id, size_t count,
                         const double* pos, const double* vel,
@@ -251,7 +253,7 @@ namespace particle_operation_dispatch {
                 auto k_acc = keep.get_access(h);                                   \
                 h.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {       \
                     part_t p = c_acc[idx];                      \
-                    if (deposit_allowed<i, Universe, Dim>(p, bnd, nullptr)) {      \
+                    if (deposit_allowed<typename Group::validator, i, Universe, Dim>(p, bnd, nullptr)) {      \
                         k_acc.push_back(p);                                        \
                         particle_operation::deposit<e_strategy_at<i, Universe::e_order>>(        \
                             p, f_acc, weight);                                     \
@@ -290,7 +292,7 @@ namespace particle_operation_dispatch {
             const bool want_dep = dfp != nullptr;                                           \
             dep_field_t& dref = want_dep ? *dfp : dummy_dep<EField::Dimension>(mng, f.getQueue());    \
             const auto bnd = bounds_of(want_dep ? dref.getGrid() : f.getGrid());            \
-            auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, group_name);                \
+            auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, species_name);                \
             grp.for_each([&](sycl::handler& h) {                                            \
                 auto acc = f.get_access(h);                                                 \
                 auto d_acc = dref.get_access(h);                                            \
@@ -298,7 +300,7 @@ namespace particle_operation_dispatch {
                 return [=](part_t& p) {                                  \
                     particle_operation::leapfrog<e_strategy_at<i, Universe::e_order>>(                    \
                         p, acc, q_m, dt);                                                   \
-                    if (deposit_allowed<i, Universe, Dim>(p, bnd, &lv_acc) && want_dep)          \
+                    if (deposit_allowed<typename Group::validator, i, Universe, Dim>(p, bnd, &lv_acc) && want_dep)          \
                         particle_operation::deposit<e_strategy_at<i, Universe::e_order>>(                 \
                             p, d_acc, deposit_weight);                                      \
                 };                                                                          \
@@ -310,7 +312,7 @@ namespace particle_operation_dispatch {
 
     // ---------- leapfrog: E-only kick + drift, runtime-fused deposit
     template <typename Universe, int Dim, typename Group, typename EField>
-    int leapfrog_one(serialization::object_manager& mng, const char* group_name,
+    int leapfrog_one(serialization::object_manager& mng, const char* species_name,
                         Group& grp,
                         EField& f, int e_id, double q_m, double dt,
                         const char* deposit_name, double deposit_weight) {
@@ -328,12 +330,12 @@ namespace particle_operation_dispatch {
         if constexpr (d_combo_ok<i, Dim, DField::Dimension, DField::QuantitySize>()) {      \
             if (!f.has_grid()) return -1;                                                   \
             const auto bnd = bounds_of(f.getGrid());                                        \
-            auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, group_name);               \
+            auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, species_name);               \
             grp.for_each([&](sycl::handler& h) {                                            \
                 auto acc = f.get_access(h);                                                 \
                 auto lv_acc = lv.get_access(h);                                            \
                 return [=](part_t& p) {                                  \
-                    if (deposit_allowed<i, Universe, Dim>(p, bnd, &lv_acc))                      \
+                    if (deposit_allowed<typename Group::validator, i, Universe, Dim>(p, bnd, &lv_acc))                      \
                         particle_operation::deposit<e_strategy_at<i, Universe::e_order>>(                 \
                             p, acc, weight_charge);                                         \
                 };                                                                          \
@@ -344,7 +346,7 @@ namespace particle_operation_dispatch {
 
     // ---------- standalone deposit onto a scalar field
     template <typename Universe, int Dim, typename Group, typename DField>
-    int deposit_one(serialization::object_manager& mng, const char* group_name,
+    int deposit_one(serialization::object_manager& mng, const char* species_name,
                     Group& grp,
                     DField& f, int e_id, double weight_charge) {
         using part_t = typename Group::value_type;
@@ -359,21 +361,21 @@ namespace particle_operation_dispatch {
 #define PSUM_PD_E2B_ARM(i)                                                                  \
     case i:                                                                                 \
         if constexpr (e_combo_ok<i, Dim, EField::Dimension, EField::QuantitySize>())        \
-            return boris_b_part<i, Universe, Dim, Group>(mng, group_name, grp, ef, bf, b_id,           \
+            return boris_b_part<i, Universe, Dim, Group>(mng, species_name, grp, ef, bf, b_id,           \
                                    q_m, dt, deposit_name, deposit_weight);                  \
         else                                                                                \
             return -2;
 
     template <int e_id_constant, typename Universe, int Dim, typename Group,
                 typename EField, typename BField>
-    int boris_b_part(serialization::object_manager& mng, const char* group_name,
+    int boris_b_part(serialization::object_manager& mng, const char* species_name,
                         Group& grp,
                         EField& ef, BField& bf, int b_id, double q_m, double dt,
                         const char* deposit_name, double deposit_weight);
 
     // ---------- boris: E + B rotation push, runtime-fused deposit
     template <typename Universe, int Dim, typename Group, typename EField, typename BField>
-    int boris_one(serialization::object_manager& mng, const char* group_name,
+    int boris_one(serialization::object_manager& mng, const char* species_name,
                     Group& grp,
                     EField& ef, BField& bf, int e_id, int b_id,
                     double q_m, double dt,
@@ -407,7 +409,7 @@ namespace particle_operation_dispatch {
             dep_field_t& dref = want_dep ? *dfp                                             \
                                          : dummy_dep<EField::Dimension>(mng, ef.getQueue());\
             const auto bnd = bounds_of(want_dep ? dref.getGrid() : ef.getGrid());           \
-            auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, group_name);                \
+            auto& lv = leave_buffer_of<Universe, Dim>(mng, grp, species_name);                \
             grp.for_each([&](sycl::handler& h) {                                            \
                 auto e_acc = ef.get_access(h);                                              \
                 auto b_acc = bf.get_access(h);                                              \
@@ -418,7 +420,7 @@ namespace particle_operation_dispatch {
                         e_strategy_at<e_id_constant, Universe::e_order>,                    \
                         b_strategy_at<i, Universe::b_order>>>(                              \
                         p, e_acc, b_acc, q_m, dt);                                          \
-                    if (deposit_allowed<e_id_constant, Universe, Dim>(p, bnd, &lv_acc) &&        \
+                    if (deposit_allowed<typename Group::validator, e_id_constant, Universe, Dim>(p, bnd, &lv_acc) &&        \
                         want_dep)                                                           \
                         particle_operation::deposit<e_strategy_at<e_id_constant,                          \
                                                  Universe::e_order>>(                      \
@@ -431,7 +433,7 @@ namespace particle_operation_dispatch {
 
     template <int e_id_constant, typename Universe, int Dim, typename Group,
                 typename EField, typename BField>
-    int boris_b_part(serialization::object_manager& mng, const char* group_name,
+    int boris_b_part(serialization::object_manager& mng, const char* species_name,
                         Group& grp,
                         EField& ef, BField& bf, int b_id, double q_m, double dt,
                         const char* deposit_name, double deposit_weight) {

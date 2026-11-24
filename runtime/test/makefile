@@ -19,13 +19,13 @@ test_poisson: test_poisson_variant.cpp
 # ---------- physics cases (C interface + psumrt.so) ----------
 
 tsi: tsi.cpp ../bin/psumrt.so
-	$(CXX) -o tsi tsi.cpp ../bin/psumrt.so -Wl,-rpath,$(abspath ../bin) -std=c++17 -O2 $(INCLUDES)
+	$(CXX) -o tsi tsi.cpp ../bin/psumrt.so -Wl,-rpath,$(abspath ../bin) -std=c++20 -O2 $(INCLUDES)
 
 sheath: sheath.cpp ../bin/psumrt.so
-	$(CXX) -o sheath sheath.cpp ../bin/psumrt.so -Wl,-rpath,$(abspath ../bin) -std=c++17 -O2 $(INCLUDES)
+	$(CXX) -o sheath sheath.cpp ../bin/psumrt.so -Wl,-rpath,$(abspath ../bin) -std=c++20 -O2 $(INCLUDES)
 
 sphere_rz: sphere_rz.cpp ../bin/psumrt.so
-	$(CXX) -o sphere_rz sphere_rz.cpp ../bin/psumrt.so -Wl,-rpath,$(abspath ../bin) -std=c++17 -O2 $(INCLUDES)
+	$(CXX) -o sphere_rz sphere_rz.cpp ../bin/psumrt.so -Wl,-rpath,$(abspath ../bin) -std=c++20 -O2 $(INCLUDES)
 
 # ---------- aggregate ----------
 

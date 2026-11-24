@@ -26,16 +26,16 @@ int main(int argc, char** argv) {
 
     const double lo[1] = {0.0}, up[1] = {length};
     const int nc[1] = {I};
-    { psum_grid_desc d = { .name="g", .dim=1, .lower=lo, .upper=up, .node_count=nc }; psum_engine_grid_create(e, &d); }
-    { psum_field_desc d = { .name="q", .grid="g", .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_field_create(e, &d); }
-    { psum_field_desc d = { .name="phi", .grid="g", .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_field_create(e, &d); }
-    { psum_field_desc d = { .name="hq", .grid="g", .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_host_field_create(e, &d); }
-    { psum_field_desc d = { .name="hphi", .grid="g", .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_host_field_create(e, &d); }
-    psum_engine_particles_create(e, "e", 1);
-    psum_engine_particles_create(e, "i", 1);
+    { psum_obj_grid_desc d = { .name="g", .dim=1, .lower={lo[0]}, .upper={up[0]}, .node_count={nc[0]} }; psum_engine_grid_create(e, &d); }
+    { psum_obj_field_desc d = { .name="q", .on_device=1, .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_field_create(e, &d, "g"); }
+    { psum_obj_field_desc d = { .name="phi", .on_device=1, .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_field_create(e, &d, "g"); }
+    { psum_obj_field_desc d = { .name="hq", .on_device=0, .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_field_create(e, &d, "g"); }
+    { psum_obj_field_desc d = { .name="hphi", .on_device=0, .quantity_size=1, .scalar_kind=PSUM_SCALAR_DOUBLE }; psum_engine_field_create(e, &d, "g"); }
+    { psum_obj_species_desc d = { .name="e", .dim=1, .has_global_mass=0, .global_mass=0, .has_global_charge=0, .global_charge=0, .has_global_weight=0, .global_weight=0 }; psum_engine_particles_create(e, &d); }
+    { psum_obj_species_desc d = { .name="i", .dim=1, .has_global_mass=0, .global_mass=0, .has_global_charge=0, .global_charge=0, .has_global_weight=0, .global_weight=0 }; psum_engine_particles_create(e, &d); }
 
     const int bc[2] = {PSUM_BC_DIRICHLET, PSUM_BC_DIRICHLET};
-    { psum_poisson_desc d = { .solver_kind=PSUM_POISSON_1D, .bc_kinds=bc, .robin_center=NULL, .grid="g", .backend="native", .options=NULL, .epsilon=8.854e-12 };
+    { psum_opt_poisson_desc d = { .solver_kind=PSUM_POISSON_1D, .bc_kinds=bc, .robin_center=NULL, .grid="g", .backend="native", .options=NULL, .epsilon=8.854e-12 };
       psum_engine_poisson_init(e, &d); }
     psum_engine_poisson_bc_value(e, PSUM_POISSON_1D, 0, 0.0);
     psum_engine_poisson_bc_value(e, PSUM_POISSON_1D, 1, 12.5);
@@ -51,9 +51,9 @@ int main(int argc, char** argv) {
         psum_engine_field_copy(e, "phi", "hphi");
 
         psum_engine_field_zero(e, "q");
-        { psum_leapfrog_desc d = { .group="e", .e_field="phi", .e_id=0, .q_m=-q_e / mass_ele, .dt=dt, .deposit_field="q", .deposit_weight=-weight };
+        { psum_opt_leapfrog_desc d = { .species="e", .e_field="phi", .e_id=0, .q_m=-q_e / mass_ele, .dt=dt, .deposit_field="q", .deposit_weight=-weight };
           psum_engine_leapfrog(e, &d); }
-        { psum_leapfrog_desc d = { .group="i", .e_field="phi", .e_id=0, .q_m=q_e / mass_ar, .dt=dt, .deposit_field="q", .deposit_weight=weight };
+        { psum_opt_leapfrog_desc d = { .species="i", .e_field="phi", .e_id=0, .q_m=q_e / mass_ar, .dt=dt, .deposit_field="q", .deposit_weight=weight };
           psum_engine_leapfrog(e, &d); }
 
         { psum_readback rb = { 0, 0, NULL, NULL };
@@ -72,8 +72,7 @@ int main(int argc, char** argv) {
                 if (!((double)std::rand() / RAND_MAX < N)) break;
             }
             if (!xbuf.empty())
-                { psum_particles_desc d = { .group=grp };
-                  psum_engine_particles_append_n(e, &d, xbuf.size(), xbuf.data(), vbuf.data()); }
+                psum_engine_particles_append_n(e, grp, xbuf.size(), xbuf.data(), vbuf.data());
         };
         inject("i", Ti, mass_ar);
         inject("e", Te, mass_ele);
@@ -89,8 +88,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    psum_engine_group_save_mas(e, "e", "/tmp/opencode/sheath_e.mas");
-    psum_engine_group_save_mas(e, "i", "/tmp/opencode/sheath_i.mas");
+    psum_engine_species_save_mas(e, "e", "/tmp/opencode/sheath_e.mas");
+    psum_engine_species_save_mas(e, "i", "/tmp/opencode/sheath_i.mas");
     psum_engine_field_save_mas(e, "phi", "/tmp/opencode/sheath_phi.mas");
     psum_engine_destroy(e);
     return 0;
