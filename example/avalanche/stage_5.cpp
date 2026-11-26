@@ -20,9 +20,11 @@ struct Avalanche_mcc_model {
     using e_tag = psum::particle_collision::species_tags::electron;
     using Ar_tag = psum::particle_collision::species_tags::Argon;
     using Ar1_tag = psum::particle_collision::species_tags::Argon_pos_1;
-    using species_in_model = std::tuple<e_tag, Ar_tag, Ar1_tag>;
-
-    struct col_ionization {
+    struct col_ionization : psum::particle_collision::reaction_collision_tag {
+        using incident_species_tag=e_tag;
+        using background_species_tag=Ar_tag;
+        using consumed_species_tags = std::tuple<>;
+        using product_species_tags = std::tuple<e_tag, Ar1_tag>;
         static double collision_cross_section(double v2) {
             return v2 > 4e12 ? 2e-20 : 0;
         }
@@ -39,34 +41,32 @@ struct Avalanche_mcc_model {
             auto dir2 = psum::random::RandFunction2D::RandV_spherical(R.get_rander());
             tag::get<property::velocity>(new_ele) = dir2 * speed * 0.8;
             tag::get<property::random_seed>(new_ele) = R.get_rander().gen_seed();
-            insert_particle_in_context<e_tag>(ctx_acc, new_ele);
+            ctx_acc.template insert_particle<e_tag>(new_ele);
 
             Particle new_ion;
             tag::get<property::position>(new_ion) = tag::get<property::position>(p);
             auto dir3 = psum::random::RandFunction2D::RandV_spherical(R.get_rander());
             tag::get<property::velocity>(new_ion) = dir3 * 1e6;
             tag::get<property::random_seed>(new_ion) = R.get_rander().gen_seed();
-            insert_particle_in_context<Ar1_tag>(ctx_acc, new_ion);
+            ctx_acc.template insert_particle<Ar1_tag>(new_ion);
         }
     };
 
-    static auto make(PG& electrons, PG& atoms, PG& ions,
-                     Field& ele_dens, Field& atom_dens, Field& ion_dens) {
+    static auto make(PG& electrons, PG& atoms, PG& ions, Field& atom_dens) {
         using namespace psum::particle_collision;
         using namespace psum::particle_collision::foundation;
 
-        using processor_type = collision_processor<density_interp_2d<Ar_tag>, std::tuple<col_ionization>>;
-        using all_col = mcc_model<mcc_submodel_for_incident<e_tag, processor_type>>;
-        using Ctx = standard_mccm_context<species_in_model, PG, Field>;
 
-        auto ctx = std::make_shared<Ctx>();
-        ctx->template get<e_tag>().bind(electrons, ele_dens);
-        ctx->template get<Ar_tag>().bind(atoms, atom_dens);
-        ctx->template get<Ar1_tag>().bind(ions, ion_dens);
+        using all_col = collision_model<col_ionization>;
+        using Ctx = species_contexts<all_col, PG, Field>;
+        struct Binding { PG* group; Field* density; };
+        auto ctx = std::make_shared<Ctx>(
+            Binding{&electrons, nullptr},
+            Binding{&atoms, &atom_dens},
+            Binding{&ions, nullptr});
 
         return [ctx](double dt) {
-            execute_mcc_model<all_col>(*ctx, dt);
-            execute_all_clean_buffers<species_in_model>(*ctx);
+            execute_collision_model<all_col>(*ctx, dt);
         };
     }
 };
@@ -90,7 +90,7 @@ int main() {
     PG atoms(q);
     PG ions(q);
 
-    Field ele_dens(q, grid), atom_dens(q, grid), ion_dens(q, grid);
+    Field atom_dens(q, grid), ion_dens(q, grid);
     Field ke_dens(q, grid);
     HField atom_host(grid);
 
@@ -103,7 +103,7 @@ int main() {
     atom_host.plot("output/atom_dens.plt", "nAr", 0.0);
     atom_dens.copy(atom_host.getContent());
 
-    auto mccm = Avalanche_mcc_model::make(electrons, atoms, ions, ele_dens, atom_dens, ion_dens);
+    auto mccm = Avalanche_mcc_model::make(electrons, atoms, ions, atom_dens);
 
     ofstream count_file("output/count.plt");
     count_file << "variables=time,ele,ion" << endl;

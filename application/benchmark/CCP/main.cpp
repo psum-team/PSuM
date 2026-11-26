@@ -149,7 +149,7 @@ void computeCCP(double nn, double ne0, double Voltage, double Nc0, int GSize, do
     init_particles(ele, ne0, weight, mass_ele, 30000, grid);
 
     atom_dens.setConstant(nn);
-    auto mccm = He_mcc_model::make<ParticleGroup, Nf>(atom, ele, ion, atom_dens, ele_dens, ion_dens);
+    auto mccm = He_mcc_model::make<ParticleGroup, Nf>(atom, ele, ion, atom_dens);
 
     for (int iter = 0; iter < FinishStep; iter++) {
         double volume = dx;

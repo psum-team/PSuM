@@ -1,0 +1,41 @@
+{
+  "source_version": "0.7.8",
+  "julia": "1.12.0",
+  "steps": 500000,
+  "statistics": [
+    150000,
+    500000
+  ],
+  "dt": 5e-14,
+  "cross_section_retrieval": "IST-Lisbon 2026-11-17, elastic182789 ionization182827",
+  "source_case": "Merzbild/cases/Official400Td, seed 1234",
+  "source_commit": "cdf1fe6709c4a395b098001af976265b127e376c",
+  "columns": [
+    "k_ion_m3_s",
+    "Te_eV"
+  ],
+  "results": {
+    "AR": {
+      "computed": [
+        4.473868440395118e-15,
+        6.815188886874093
+      ],
+      "author_reference": [
+        4.47e-15,
+        6.82
+      ],
+      "sha256": "dfd2979ba9bf8db0482eea62435cdc650ee5087e35589db8f1670dee499e48ed"
+    },
+    "ES": {
+      "computed": [
+        4.4609018284557086e-15,
+        6.79871046836654
+      ],
+      "author_reference": [
+        4.46e-15,
+        6.8
+      ],
+      "sha256": "da581f1232bb3cd09ddde30ba58b55335269925bfeb1520a347395601f9bf625"
+    }
+  }
+}

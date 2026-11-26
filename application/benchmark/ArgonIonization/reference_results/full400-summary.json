@@ -1,0 +1,234 @@
+{
+  "official": {
+    "rate": 4.473868440395118e-15,
+    "temperature": 6.815188886874094,
+    "max_relative_charge_imbalance": 8.480000000000631e-14,
+    "max_relative_argon_inventory_drift": 6.727951529228449e-14,
+    "initial_macros": [
+      5988,
+      100,
+      18
+    ],
+    "final_macros": [
+      10520,
+      163,
+      83
+    ],
+    "final_population": [
+      5.631937213459827e+20,
+      9.943681627865505e+22,
+      5.6319372134598214e+20
+    ],
+    "snapshots": 101,
+    "window_frames": 70,
+    "max_relative_histogram_inventory_error": 5.384581669432009e-14
+  },
+  "weighted": {
+    "rate": 4.35990652214032e-15,
+    "temperature": 6.73662396415971,
+    "channels": {
+      "elastic": {
+        "requests": 428416937,
+        "matched": 428416937,
+        "lost": 0,
+        "accepted": 3995053,
+        "clipped": 29
+      },
+      "ionization": {
+        "requests": 428416199,
+        "matched": 428416199,
+        "lost": 0,
+        "accepted": 92941,
+        "clipped": 0
+      },
+      "ArAr": {
+        "requests": 149743445,
+        "matched": 149743445,
+        "lost": 0,
+        "accepted": 4048,
+        "clipped": 0
+      }
+    },
+    "max_relative_charge_imbalance": 1.0780912182905138e-13,
+    "max_relative_argon_inventory_drift": 3.907985046680551e-14,
+    "initial_macros": [
+      5988,
+      3992,
+      18
+    ],
+    "final_macros": [
+      9147,
+      7915,
+      91
+    ],
+    "final_population": [
+      4.41216668561987e+20,
+      9.95587933314369e+22,
+      4.41216668562012e+20
+    ],
+    "snapshots": 101,
+    "window_frames": 70,
+    "max_relative_histogram_inventory_error": 1.0902390101819037e-13
+  },
+  "simple": {
+    "rate": 4.03868328711537e-15,
+    "temperature": 6.61622296558135,
+    "channels": {
+      "elastic": {
+        "requests": 428113336,
+        "matched": 428113336,
+        "lost": 0,
+        "accepted": 4409809,
+        "clipped": 0
+      },
+      "ionization": {
+        "requests": 428151412,
+        "matched": 428151412,
+        "lost": 0,
+        "accepted": 84958,
+        "clipped": 0
+      },
+      "ArAr": {
+        "requests": 99976060,
+        "matched": 99976060,
+        "lost": 0,
+        "accepted": 1267,
+        "clipped": 0
+      }
+    },
+    "thinning": [
+      [
+        45103,
+        12001,
+        5929,
+        3333611111111.112
+      ],
+      [
+        80065,
+        12001,
+        5976,
+        6667777824074.076
+      ],
+      [
+        115004,
+        12001,
+        6043,
+        13336666944452.166
+      ],
+      [
+        149464,
+        12001,
+        6013,
+        26675556666728.41
+      ],
+      [
+        183838,
+        12002,
+        5916,
+        53360005185679.06
+      ],
+      [
+        219157,
+        12001,
+        5954,
+        106728903705555.75
+      ],
+      [
+        254848,
+        12001,
+        6042,
+        213475595561729.12
+      ],
+      [
+        288456,
+        12001,
+        6016,
+        426986770389385.25
+      ],
+      [
+        322469,
+        12001,
+        5930,
+        854044705240502.1
+      ],
+      [
+        357476,
+        12001,
+        6001,
+        1708231751265211.2
+      ],
+      [
+        391302,
+        12001,
+        6029,
+        3416748207822300.5
+      ],
+      [
+        425469,
+        12001,
+        5971,
+        6834065873679239.0
+      ],
+      [
+        459984,
+        12001,
+        5903,
+        1.3669270758337426e+16
+      ],
+      [
+        494870,
+        12001,
+        5973,
+        2.734081972846791e+16
+      ]
+    ],
+    "neutral_removals": 10,
+    "expected_removals": 7.348802845770353,
+    "resampling_weight_change": -2.2143689669603515e+18,
+    "final_plasma_weight": 2.734081972846791e+16,
+    "max_relative_charge_imbalance": 2.263737271126848e-14,
+    "max_relative_argon_inventory_drift": 0.0011281151811910473,
+    "initial_macros": [
+      6000,
+      4000,
+      6000
+    ],
+    "final_macros": [
+      6639,
+      3990,
+      6639
+    ],
+    "final_population": [
+      1.81515702177298e+20,
+      9.97499999999983e+22,
+      1.81515702177296e+20
+    ],
+    "snapshots": 101,
+    "window_frames": 70,
+    "max_relative_histogram_inventory_error": 5.46229728115577e-14
+  },
+  "matched": {
+    "rate": 4.398095816241803e-15,
+    "temperature": 6.754220509111559,
+    "max_relative_charge_imbalance": 8.480000000000631e-14,
+    "max_relative_argon_inventory_drift": 6.727951529228449e-14,
+    "initial_macros": [
+      5988,
+      8000,
+      18
+    ],
+    "final_macros": [
+      9424,
+      5559,
+      30
+    ],
+    "final_population": [
+      4.7351345808966464e+20,
+      9.952649654191196e+22,
+      4.735134580896649e+20
+    ],
+    "snapshots": 101,
+    "window_frames": 70,
+    "max_relative_histogram_inventory_error": 5.340172748447003e-14
+  }
+}

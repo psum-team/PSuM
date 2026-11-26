@@ -412,21 +412,42 @@ PSuM's collision module is divided into two categories:
 
 Both are designed around the principle of "users provide collision models, and the framework handles parallel traversal, context access, and new particle buffering."
 
-#### mcc_model and Contexts
+#### collision_model and Contexts
 
-`mcc_model<SubModels...>` itself is primarily a type container.
-Each `mcc_submodel_for_incident<IncidentTag, CollisionSet>` represents an incident particle species and its possible collision set.
+`collision_model<CollisionTypes...>` lists unique collision types directly. Each type declares
+`incident_species_tag` and `background_species_tag`; the framework groups channels and selects executors.
 
-`mcc_species_context<ParticleContainer, Field>` binds a particle container and a density field:
+| Base markers | Channel type | Callbacks |
+| --- | --- | --- |
+| None | Ordinary MCC | `collide` |
+| `reaction_collision_tag` | Reactive MCC | `collide` |
+| `deferred_pairing_collision_tag` | Ordinary DPMCC | `request_probability`, `pair_collision_cross_section` and `pair_collide` |
+| Both | Reactive DPMCC | `request_probability`, `pair_collision_cross_section` and `pair_collide` |
 
-- `group_ref_getter` returns the real particle group.
-- `field_acc_getter` generates a density field accessor when submitting kernel functions.
-- `buffer` temporarily stores new particles produced by collisions.
+Reaction channels must declare `consumed_species_tags` and `product_species_tags` as `std::tuple` types.
+MCC can consume the incident species. DPMCC can consume the species of either pair endpoint.
+Products may be separate species. Use `std::tuple<>` for an empty declaration.
 
-Multiple species contexts are combined via `mcc_module_context<tag_bind<Tag, Context>...>`.
-It follows PSuM's tag system, enabling kernel code to access a specific species' density field and new particle buffer via `ctx_acc.get<SpeciesTag>()`.
+Collision contexts are organized by role under `src/particle_collision/context/`.
 
-At runtime, `execute_mcc_model<Model>(ctx, dt)` expands submodels and calls `execute_single_collision` for each incident species.
+- `species_context` binds a species' particle group and required density field for either collision role. Its pairing view uses the group's current base address and slot extent.
+- `species_contexts<Model, PG, Field>` binds all species at construction in `Model::species_tuple` order and checks each remaining particle group against the first group's queue. Species used as a background by any channel require a density field. Other species only require a particle group. Declared product species receive a product buffer.
+- `collision_channel_context` owns a deferred channel's request buffer and pairing engine. `collision_channel_contexts` collects them by collision type.
+- `tagged_context` binds resources to tags. `context_composition` combines contexts so kernels can access each resource with `ctx_acc.get<Tag>()`.
+
+Once a reaction channel is selected, its tags determine which insertion and erasure methods its callback can use.
+`ctx.template insert_particle<ProductTag>(p)` appends a product to that species' buffer.
+An MCC reaction calls `ctx.template erase_particle<IncidentTag>()` to remove the current particle.
+A DPMCC reaction calls `ctx.template erase_particle<IncidentTag>(pair.first)` or `ctx.template erase_particle<BackgroundTag>(pair.second)`.
+Each call requests one endpoint and records the request only if the pointer identifies a particle of that species in the current pair.
+Both endpoints of a same-species pair use the same species tag. Deletion takes effect when the callback returns,
+and repeated requests for the same particle record one slot.
+
+The complete entry point is `execute_collision_model<Model>(ctx, dt)`. Its incident pass (`execute_incident_collisions<Model::collision_types_tuple>(ctx, dt)`) visits each incident species and runs its collision channels.
+The complete collision step visits each incident species once. Each particle executes MCC before generating all DPMCC requests from its updated state. Background batches filter invalid requests and recount them before pairing, with at most two segments per batch: all same-species channels first, then all cross-species channels, waiting for each segment to finish. All products are inserted after all batches finish and become available for collisions in the next step.
+Product reservation reuses the sampling groups: channels with the same incident species, background species, and MCC/DPMCC kind belong to one group. For each product species, take the largest per-event count within each group, multiply by the initial incident population, and sum across groups plus existing buffered products. Repeated product_species_tags entries declare the maximum insertions of that species per event; tuple<Electron, Electron> declares up to two new electrons. Maxima are taken independently for each product, and MCC and DPMCC groups accumulate separately. This estimate covers normally generated requests, not manually preloaded requests. Callbacks must respect their declared limits; there is no new per-event insertion counter, and buffer overflow checks remain. Reservation counts are read lazily once per incident species before collisions and reused by product and request reservation through a local host cache. The cache is rebuilt each step and is never used for request validity filtering.
+Request reservation first uses the host-side extent() as an upper bound on new requests, plus pending requests. If that fits, no live population count is read back. Otherwise it reads and reuses the initial-count cache above, growing only when necessary to max(required, capacity + capacity/2). Existing capacity is retained; this growth policy applies only to request buffers, not product reservation.
+Same-species incident marks are owned by the species context, allocated lazily when live requests exist, and reused with approximately 1.5x growth. Each nonempty same-species segment clears the current extent before filtered requests mark their endpoints; subsequent channels share the marks without clearing again. Storage lives until the species context is destroyed and is not part of its device accessor. Cross-species-only and pure MCC models allocate no marks.
 The framework provides template metaprogramming tools for iterating over provided type tuples, allowing declarative model definitions.
 
 The flow of a single MCC execution is:
@@ -436,7 +457,7 @@ The flow of a single MCC execution is:
 2. In the kernel, interpolate background density and compute collision probability
 3. Randomly select a specific collision channel
 4. Modify the current particle, or push_back new particles to a species buffer
-5. After all collisions finish, execute_all_clean_buffers batch-inserts buffer contents back into particle_group
+5. After all collisions finish, flush_product_buffers batch-inserts buffer contents back into particle_group
 ```
 
 The buffer's existence is important.
@@ -448,20 +469,142 @@ You cannot directly insert new particles into `particle_group` on the device sid
 Some collisions cannot be handled by examining just one particle and a background field — a second real particle must be found as the collision partner.
 DPMCC handles this class of problems through "deferred pairing."
 
-A deferred pairing collision type inherits from `base_of_deferred_pairing_collision`.
-`standard_dpmccm_context` filters these types from all collision channels in the `mcc_model` and prepares a buffer for each deferred collision type.
+A deferred pairing collision type inherits from `deferred_pairing_collision_tag`.
+
+DPMCC requires request_probability(p,ctx) -> double,
+pair_collision_cross_section(pair,ctx) -> double (physical cross section in m^2),
+and pair_collide(pair,ctx) -> void. It no longer uses the single-particle
+collision_cross_section(v2) callback; MCC retains that interface.
+
+Request probabilities are absolute per-channel probabilities. They must be finite
+and nonnegative, and their sum within a sampling group must not exceed one.
+The remaining probability means no request. Invalid groups generate no requests;
+the framework does not normalize weights or multiply proposals by speed, density,
+or dt. A constant return value such as 0.25 also samples stationary incidents.
+The payload records the selected channel probability, not the group total.
+
+After pairing, the framework computes
+p = factor * sigma * |v_first - v_second| * n_background * dt / request_probability,
+where factor is 0.5*(N-1)/N for same-species channels and 1 otherwise; self
+collisions are skipped for N below 2. All species use the same physical coordinate convention for particle positions.
+Request binning, background particle binning, and density interpolation use the
+background species projection. Density is sampled at the incident position.
+The cross-section callback must not include this factor, density, dt, or proposal
+correction. Existing invalid-probability warnings and clipping above one remain;
+invalid cross sections are warned about and rejected. This adds no M/K correction.
+
+`collision_channel_contexts` filters these types from the `collision_model` and prepares a buffer keyed by each collision type.
 
 The execution flow is:
 
 ```text
-1. During the normal MCC phase, if an incident particle triggers a deferred collision, write {position, particle pointer, null pointer} to the DPMCC buffer
+1. When an incident particle triggers a deferred collision, write {uint32_t cell ID, {&p, nullptr, request probability}} to the DPMCC buffer
 2. pairing_engine maps these requests to partitions based on the spatial grid
-3. Traverse background particles, claim requests in each partition, fill in the second particle pointer
-4. clean_buffer traverses the buffer again, calling Col::pair_collide(p1, p2, ctx_acc) for successfully paired particles
+3. Traverse background particles, claim requests in each partition, and fill the second endpoint with the selected background particle pointer
+4. Compute acceptance from the physical pair cross section, sample it without endpoint locks, and call pair_collide only on acceptance
 ```
 
-`pairing_engine` internally maintains particle counts `n_counts_` and ticket counts `ticket_counters_` per grid cell.
-`oversample_factor` controls the probability of background particles participating in pairing, preventing complete failure to pair when request counts are low, and avoiding excessive scanning of all particles when request counts are high.
+pairing_engine uses uint32_t cell counts, prefix offsets and ticket counters,
+for workloads with fewer than 2^32 total requests per channel. The prefix array
+has C+1 entries: a leading zero followed by an inclusive scan of C counts. Only
+the last entry is read back to obtain the total live request count.
+Valid background particles inside the grid attempt to claim requests directly, without reading density or applying a random participation gate.
+
+Background traversal uses the restored four-round Feistel index permutation,
+with cycle walking over the raw particle extent. Each segment draws a random
+seed on the host using std::random_device, independently of particle RNG streams.
+Both groups keep endpoint addresses and slot identities stable until all background
+batches finish. Manual callers must wait for all pending requests involving a group
+before reserving, reordering, or reusing its slots.
+Request tickets are used directly; there is no per-cell request permutation.
+Randomized background traversal does not establish uniform sampling of the request
+queue prefix. Unmatched requests due to insufficient backgrounds are skipped without
+probability compensation. Excluding the incident set reduces the available
+same-species background pool; channel priority affects which requests are matched.
+
+Species contexts allocate a uint32_t cell-centered particle-count field only when
+the model contains a same-species DPMCC channel for that species. It uses the
+species density grid and is cleared before request generation. Inside the unique
+self-channel group, each live in-grid particle is counted once after MCC and before
+request sampling, including particles that emit no request. The completed field
+is read during collision acceptance. It is a request-time snapshot, not updated
+for later DPMCC consumption or final product insertion. Cross-species-only DPMCC
+and pure MCC allocate no count field. Tests calling low-level self-collision
+execution directly must supply counts. This finite-population factor does not
+compensate for background shortages or partner-selection bias; density and count
+snapshots must be consistent before claiming unbiased probabilities.
+
+After filtering invalid requests, each same-species segment marks the union of
+incident endpoints from all its channels. The remaining valid particles form the
+background set. A reusable byte array indexed by raw particle slot is owned by the species
+context. Its active extent is cleared before the first nonempty live channel
+scatters its payloads.
+Each channel marks live incident endpoints inside its scatter kernel; there is
+no separate marking kernel. All marking completes before background traversal,
+which only reads the array. Storage is retained and cleared for the next live segment. Normal request generation emits at most one same-species
+request per incident particle. Each background particle claims at most one request,
+so endpoints are disjoint within and across channels. Manual requests must also
+have unique incident endpoints across the segment. There are no endpoint locks,
+atomic reservations, or unlock operations, and no persistent lock resource.
+
+For unified cross-species channels, the standard request generator emits at most
+one request per incident particle per background group. Each background endpoint
+is selected at most once across all channels in the segment. Channels are tried
+in declaration order; the first successful pairing blocks the rest, irrespective
+of reaction or consumption tags. Probability rejection does not reassign that
+background particle. The two segments remain separate: surviving particles from
+the same-species segment can still participate in the cross-species segment.
+Both segments traverse mapped requests directly, skipping entries with a null
+background endpoint. After pairing finishes, at most one collision kernel executes
+the segment. There is no task array, task counter readback, or consumption-based
+execution ordering.
+
+Empty input sets the logical request total to zero and skips counter reset, scan,
+and mapping. An input with no live requests after filtering also skips mapping.
+Selectors check the total before reading any retained partition data. A later
+nonempty batch rebuilds its counters and partitions normally. Background traversal
+uses the host-side group extent(); empty segments also draw a host-side permutation
+seed.
+
+The input buffer stores uint32_t cell IDs captured at request generation plus
+payloads; out-of-grid proposals are not enqueued. Filtering still removes invalid
+particles, but later particle movement does not change the recorded cell. The
+partitioned engine array stores only payloads: two particle pointers and the
+request probability. Its logical length is host-side total_size_; no device-side
+size is updated, and growth discards old contents without copying them. Execution
+covers all filtered requests and returns immediately for unmatched entries.
+species_contexts rejects distinct species tags bound to the same particle group
+with invalid_argument during construction, before creating species resources.
+This covers incident, background, and product tags, including pure MCC models.
+Multiple channels may use the same species tag; its same-species channels use
+one joint incident set. Execution has no duplicate-binding check, serial flag, or
+serial fallback.
+
+Channel bindings require a collision-body factory. Pairing always filters invalid
+requests, recounts, and executes collisions; there is no pairing-only result-export
+path. Selected pairs are not copied back to the input buffer, which is cleared
+after execution. Request generation only appends to the buffer; it does not count
+requests by cell or require a separate preparation call. For nonempty input, deal resets tickets
+and cell counts, filters invalid requests, and counts live requests before mapping.
+Product buffers reserve capacity before collisions; flushing inserts and clears
+them without an occupancy-triggered capacity doubling.
+All same-species channels run in the first segment using the joint incident set.
+Surviving particles can participate in cross-species collisions in the second
+segment. Roles are rebuilt from filtered requests on each batch, so old marks
+cannot restrict a later batch or a resized particle group.
+
+The partition follows existing requests; it adds no random split and does not
+change request probabilities. The framework applies the finite-population factor
+during collision acceptance. For a cell with N valid particles and R same-species requests,
+at most min(R,N-R) pairs can form. If every particle requests, no background
+candidate remains and no pair forms. There is no K counter or probability
+compensation for unmatched requests.
+
+Low-level foundation::execute_pair callers must supply disjoint endpoints within
+each parallel execution. Cross-species requests must also use distinct particle
+groups. The host context must not be mutated or rebound while kernels use its
+views. Concurrent independent contexts accessing the same particles require
+additional coordination.
 
 This module also provides many metaprogramming tools.
 

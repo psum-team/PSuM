@@ -19,10 +19,10 @@ using HField = host_node_field2D<double>;
 struct Avalanche_mcc_model {
     using e_tag = psum::particle_collision::species_tags::electron;
     using Ar_tag = psum::particle_collision::species_tags::Argon;
-    using Ar1_tag = psum::particle_collision::species_tags::Argon_pos_1;
-    using species_in_model = std::tuple<e_tag, Ar_tag, Ar1_tag>;
 
     struct col_ionization {
+        using incident_species_tag=e_tag;
+        using background_species_tag=Ar_tag;
         static double collision_cross_section(double v2) {
             return v2 > 4e12 ? 2e-20 : 0;
         }
@@ -36,23 +36,19 @@ struct Avalanche_mcc_model {
         }
     };
 
-    static auto make(PG& electrons, PG& atoms, PG& ions,
-                     Field& ele_dens, Field& atom_dens, Field& ion_dens) {
+    static auto make(PG& electrons, PG& atoms, Field& atom_dens) {
         using namespace psum::particle_collision;
         using namespace psum::particle_collision::foundation;
 
-        using processor_type = collision_processor<density_interp_2d<Ar_tag>, std::tuple<col_ionization>>;
-        using all_col = mcc_model<mcc_submodel_for_incident<e_tag, processor_type>>;
-        using Ctx = standard_mccm_context<species_in_model, PG, Field>;
 
-        auto ctx = std::make_shared<Ctx>();
-        ctx->template get<e_tag>().bind(electrons, ele_dens);
-        ctx->template get<Ar_tag>().bind(atoms, atom_dens);
-        ctx->template get<Ar1_tag>().bind(ions, ion_dens);
+        using all_col = collision_model<col_ionization>;
+        using Ctx = species_contexts<all_col, PG, Field>;
+        struct Binding { PG* group; Field* density; };
+        auto ctx = std::make_shared<Ctx>(
+            Binding{&electrons, nullptr}, Binding{&atoms, &atom_dens});
 
         return [ctx](double dt) {
-            execute_mcc_model<all_col>(*ctx, dt);
-            execute_all_clean_buffers<species_in_model>(*ctx);
+            execute_collision_model<all_col>(*ctx, dt);
         };
     }
 };
@@ -76,7 +72,7 @@ int main() {
     PG atoms(q);
     PG ions(q);
 
-    Field ele_dens(q, grid), atom_dens(q, grid), ion_dens(q, grid);
+    Field atom_dens(q, grid);
     HField atom_host(grid);
 
     atom_host.setZero();
@@ -88,7 +84,7 @@ int main() {
     atom_host.plot("output/atom_dens.plt", "nAr", 0.0);
     atom_dens.copy(atom_host.getContent());
 
-    auto mccm = Avalanche_mcc_model::make(electrons, atoms, ions, ele_dens, atom_dens, ion_dens);
+    auto mccm = Avalanche_mcc_model::make(electrons, atoms, atom_dens);
 
     ofstream count_file("output/count.plt");
     count_file << "variables=time,ele,ion" << endl;

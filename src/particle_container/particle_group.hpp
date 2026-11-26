@@ -1,12 +1,55 @@
 #ifndef PSUM_PARTICLE_CONTAINER_PARTICLE_CONTAINER_HPP
 #define PSUM_PARTICLE_CONTAINER_PARTICLE_CONTAINER_HPP
 
+#include <array>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
 #include "device_vector.hpp"
 #include "validator.hpp"
 
 namespace psum {
 
 namespace particle_container {
+
+    namespace detail {
+        class slot_permutation {
+            std::size_t extent_;
+            std::array<std::uint64_t, 4> round_keys_;
+            unsigned half_bits_;
+            std::uint64_t mask_;
+
+        public:
+            constexpr slot_permutation(std::size_t extent, std::array<std::uint64_t, 4> round_keys)
+                : extent_(extent), round_keys_(round_keys),
+                  half_bits_(extent ? (std::bit_width(extent - 1) + 1) / 2 : 0),
+                  mask_((std::uint64_t{1} << half_bits_) - 1) {}
+
+            constexpr slot_permutation(std::size_t extent, std::uint64_t seed)
+                : slot_permutation(extent, {seed, seed + 1, seed + 2, seed + 3}) {}
+
+            // Map a slot in [0, extent_) back into that range by cycle walking.
+            constexpr std::size_t operator()(std::size_t index) const {
+                do {
+                    std::uint64_t left = index & mask_;
+                    std::uint64_t right = index >> half_bits_;
+                    for (unsigned round = 0; round < 4; ++round) {
+                        std::uint64_t mixed = right ^ round_keys_[round];
+                        mixed ^= mixed >> 33;
+                        mixed *= 0xff51afd7ed558ccdULL;
+                        mixed ^= mixed >> 33;
+                        mixed *= 0xc4ceb9fe1a85ec53ULL;
+                        mixed ^= mixed >> 33;
+                        const auto next = left ^ (mixed & mask_);
+                        left = right;
+                        right = next;
+                    }
+                    index = (right << half_bits_) | left;
+                } while (index >= extent_);
+                return index;
+            }
+        };
+    }
 
     template<typename Particle, template<typename> typename Validator>
     requires is_validator<Validator<Particle>, Particle>
@@ -33,6 +76,9 @@ namespace particle_container {
             return data_.size() - invalid_indexes_.size();
         }
 
+        // Number of addressable slots, including invalid particles.
+        size_t extent() const { return extent_; }
+
         size_t capacity() const {
             return data_.capacity();
         }
@@ -40,6 +86,7 @@ namespace particle_container {
         void clear() {
             data_.resize(0);
             invalid_indexes_.resize(0);
+            extent_=0;
         }
 
         void shuffle() {
@@ -51,66 +98,32 @@ namespace particle_container {
             device_vector<Particle> old_data(q_, data_size);
             q_.memcpy(old_data.data(), data_.data(), data_size * sizeof(Particle)).wait();
 
-            uint32_t total_bits = 0;
-            while ((size_t(1) << total_bits) < data_size) total_bits++;
-            if (total_bits % 2 != 0) total_bits++; 
-            uint32_t half_bits = total_bits / 2;
-            uint64_t mask = (1ULL << half_bits) - 1;
-
             std::random_device rd;
             std::mt19937_64 gen(rd());
-            size_t seed = gen();
+            const detail::slot_permutation permute(data_size, static_cast<size_t>(gen()));
 
             q_.submit([&](sycl::handler& h) {
                 auto data_acc = data_.get_access(h);
                 auto old_acc = old_data.get_access(h);
 
                 h.parallel_for(sycl::range<1>(data_size), [=](sycl::id<1> item) {
-                    size_t idx = item[0];
-                    size_t current_idx = idx;
-
-                    // // use Feistel network for permutation
-                    auto feistel_op = [mask, half_bits](size_t x, size_t s) {
-                        uint64_t L = x & mask;
-                        uint64_t R = x >> half_bits;
-                        
-                        for (int i = 0; i < 4; ++i) {
-                            uint64_t f = R ^ (s + i);
-                            f ^= f >> 33;
-                            f *= 0xff51afd7ed558ccdULL;
-                            f ^= f >> 33;
-                            f *= 0xc4ceb9fe1a85ec53ULL;
-                            f ^= f >> 33;
-
-                            uint64_t nextL = R;
-                            uint64_t nextR = L ^ (f & mask); 
-                            L = nextL;
-                            R = nextR;
-                        }
-                        return (R << half_bits) | L;
-                    };
-
-                    // Cycle-Walking
-                    do {
-                        current_idx = feistel_op(current_idx, seed);
-                    } while (current_idx >= data_size);
-
-                    data_acc[current_idx] = old_acc[idx];
+                    data_acc[permute(item[0])] = old_acc[item[0]];
                 });
             }).wait();
         }
 
         template <bool NeedValidataion>
         void insert(const device_vector<Particle>& particles) requires(NeedValidataion == false) {
-            if (particles.size() == 0) return;
+            const size_t insert_size = particles.size();
+            if (insert_size == 0) return;
             if (particles.get_queue().get_device() != q_.get_device()) {
                 throw std::runtime_error("Error: queue mismatch in particle_group::insert");
             }
             size_t original_size = data_.size();
-            size_t insert_size = particles.size();
             size_t invalid_size = invalid_indexes_.size();
             if (invalid_size == 0) {
                 data_.resize(original_size + insert_size); // may call reserve
+                extent_=original_size+insert_size;
                 invalid_indexes_.reserve(data_.capacity()); // keep same capacity
                 q_.memcpy(data_.data() + original_size, particles.data(), insert_size * sizeof(Particle)).wait();
             } else if(insert_size <= invalid_size) {
@@ -139,6 +152,7 @@ namespace particle_container {
                 invalid_indexes_.resize(0);
                 size_t rest_insert_size = insert_size - invalid_size;
                 data_.resize(original_size + rest_insert_size); // may call reserve
+                extent_=original_size+rest_insert_size;
                 invalid_indexes_.reserve(data_.capacity()); // keep same capacity
                 q_.memcpy(data_.data() + original_size, particles.data() + invalid_size, rest_insert_size * sizeof(Particle)).wait();
             }
@@ -146,16 +160,18 @@ namespace particle_container {
 
         template <bool NeedValidation = true>
         void insert(const device_vector<Particle>& particles_in) {
-            if (particles_in.size() == 0) return;
-            device_vector<Particle> particles(particles_in.get_queue(), particles_in.size());
-            particles_in.for_each([&](sycl::handler &h) {
-                auto particles_acc = particles.get_access(h);
-                return [=](const Particle& p) {
-                    if (validator::is_valid(p)) {
-                        particles_acc.push_back(p);
-                    }
-                };
-            });
+            const size_t count = particles_in.size();
+            if (count == 0) return;
+            auto q = particles_in.get_queue();
+            device_vector<Particle> particles(q, count);
+            q.submit([&](sycl::handler& h) {
+                auto source = particles_in.get_access(h);
+                auto valid = particles.get_access(h);
+                h.parallel_for(sycl::range<1>(count), [=](sycl::id<1> i) {
+                    const auto& p = source[i[0]];
+                    if (validator::is_valid(p)) valid.push_back(p);
+                });
+            }).wait();
             insert<false>(particles);
         }
 
@@ -247,6 +263,7 @@ namespace particle_container {
             q_.memcpy(new_data.data(), data_.data(), old_size * sizeof(Particle)).wait();
             data_ = std::move(new_data);
             data_.resize(old_size);
+            extent_=old_size;
             invalid_indexes_ = std::move(new_invalid_indexes);
         }
 
@@ -262,6 +279,7 @@ namespace particle_container {
         sycl::queue& q_;
         device_vector<Particle> data_;
         device_vector<size_t> invalid_indexes_;
+        size_t extent_=0;
     };
 
 }

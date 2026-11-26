@@ -205,19 +205,19 @@ make avalanche
 
 从 Stage 2 的 `avalanche.cpp` 继续修改：
 - 添加 `Avalanche_mcc_model` 结构体，碰撞类型 `col_ionization` 的 `collide()` 暂时只实现散射改向部分（不产生新粒子）。
-- 创建多物种粒子组（原子、离子）和对应密度场。
+- 创建原子和离子粒子组，以及背景原子密度场。
 - 在循环中调用碰撞模型，观察电子在气团中的散射行为。
 
-在 main 之前定义 MCC 模型。它声明了参与碰撞的物种（电子、氩原子、氩离子），并提供一个碰撞类型 `col_ionization`：
+在 main 之前定义 MCC 模型，入射物种是电子，背景物种是氩原子。
 
 ```cpp
 struct Avalanche_mcc_model {
     using e_tag = psum::particle_collision::species_tags::electron;
     using Ar_tag = psum::particle_collision::species_tags::Argon;
-    using Ar1_tag = psum::particle_collision::species_tags::Argon_pos_1;
-    using species_in_model = std::tuple<e_tag, Ar_tag, Ar1_tag>;
 
     struct col_ionization {
+        using incident_species_tag=e_tag;
+        using background_species_tag=Ar_tag;
         static double collision_cross_section(double v2) {
             return v2 > 4e12 ? 2e-20 : 0;
         }
@@ -238,45 +238,41 @@ struct Avalanche_mcc_model {
 再给出一个 `make()` 工厂函数，把碰撞类型组装成可执行的 MCC 模型，并返回一个接收 `dt` 的 lambda：
 
 ```cpp
-    static auto make(PG& electrons, PG& atoms, PG& ions,
-                     Field& ele_dens, Field& atom_dens, Field& ion_dens) {
+    static auto make(PG& electrons, PG& atoms, Field& atom_dens) {
         using namespace psum::particle_collision;
         using namespace psum::particle_collision::foundation;
 
-        using processor_type = collision_processor<density_interp_2d<Ar_tag>, std::tuple<col_ionization>>;
-        using all_col = mcc_model<mcc_submodel_for_incident<e_tag, processor_type>>;
-        using Ctx = standard_mccm_context<species_in_model, PG, Field>;
 
-        auto ctx = std::make_shared<Ctx>();
-        ctx->template get<e_tag>().bind(electrons, ele_dens);
-        ctx->template get<Ar_tag>().bind(atoms, atom_dens);
-        ctx->template get<Ar1_tag>().bind(ions, ion_dens);
+        using all_col = collision_model<col_ionization>;
+        using Ctx = species_contexts<all_col, PG, Field>;
+        struct Binding { PG* group; Field* density; };
+        auto ctx = std::make_shared<Ctx>(
+            Binding{&electrons, nullptr}, Binding{&atoms, &atom_dens});
 
         return [ctx](double dt) {
-            execute_mcc_model<all_col>(*ctx, dt);
-            execute_all_clean_buffers<species_in_model>(*ctx);
+            execute_collision_model<all_col>(*ctx, dt);
         };
     }
 };
 ```
 
-组装链是编译期的：`collision_processor`（以氩原子密度插值为概率密度）→ `mcc_submodel_for_incident`（电子为入射粒子）→ `mcc_model`。运行时用 `execute_mcc_model` 执行一次碰撞步。
+`collision_model` 直接接收碰撞类型；框架依据类型声明的入射和背景物种，在编译期选择执行路径。运行时用 `execute_collision_model` 执行一次碰撞步。
 
-在 main 中创建原子、离子容器和对应的密度场（原子密度场与 Stage 2 的气团共用）：
+在 main 中创建原子、离子容器，并沿用 Stage 2 的背景原子密度场。
 
 ```cpp
     PG electrons(q);
     PG atoms(q);
     PG ions(q);
 
-    Field ele_dens(q, grid), atom_dens(q, grid), ion_dens(q, grid);
+    Field atom_dens(q, grid);
     HField atom_host(grid);
 ```
 
 在气团初始化之后创建碰撞模型：
 
 ```cpp
-    auto mccm = Avalanche_mcc_model::make(electrons, atoms, ions, ele_dens, atom_dens, ion_dens);
+    auto mccm = Avalanche_mcc_model::make(electrons, atoms, atom_dens);
 ```
 
 把 `count.plt` 的表头加上离子列：
@@ -311,7 +307,7 @@ make avalanche
 运行后应看到：`count.plt`（ion 列始终为 0，电子因为不再直接飞离计算域，稳态数量上升），`atom_dens.png`，终端输出电子和离子计数。
 
 这一阶段你只需要知道：
-- MCC 类型组装链是编译期的，运行时通过 `execute_mcc_model<Model>(ctx, dt)` 执行。
+- MCC 类型组装链是编译期的，运行时通过 `execute_collision_model<Model>(ctx, dt)` 执行。
 - 此时 `collide()` 只改变入射粒子的飞行方向和能量，不产生新粒子（电离部分在 Stage 5 补完）。
 - 速度衰减因子保证能量递减；低速时截面为零，碰撞自然停止。
 
@@ -376,11 +372,13 @@ make avalanche
 ### Stage 5：电离碰撞与雪崩级联
 
 从 Stage 4 的 `avalanche.cpp` 继续修改：
-- 在 `col_ionization::collide()` 中补完电离部分：通过 `insert_particle_in_context` 产生次级电子和离子。
+- 让 `col_ionization` 继承 `reaction_collision_tag`，声明 `consumed_species_tags = std::tuple<>` 和 `product_species_tags = std::tuple<e_tag, Ar1_tag>`，其中 `Ar1_tag` 是 `species_tags::Argon_pos_1`。
+- 在 `make()` 中按电子、原子、离子的顺序绑定种群。碰撞上下文使用原子密度场，另建离子密度场用于画图。第五阶段调用 `execute_collision_model<all_col>(*ctx, dt)`，在抽样前为两种产物预留容量，并在步末统一回填。
+- 在 `col_ionization::collide()` 中调用碰撞上下文的 `insert_particle<Tag>`，登记次级电子和离子。
 - 添加离子密度场的 deposit 和 plot。
 - 将持续注入改为前 1/4 时间段注入。
 
-在 `collide()` 里，散射改向之后，再产生一个次级电子和一个氩离子，通过 `insert_particle_in_context` 写入 buffer：
+在 `collide()` 里，散射改向之后，再产生一个次级电子和一个氩离子，并写入各物种的产物缓冲区。
 
 ```cpp
         static void collide(auto& p, const auto& ctx_acc) {
@@ -396,14 +394,14 @@ make avalanche
             auto dir2 = psum::random::RandFunction2D::RandV_spherical(R.get_rander());
             tag::get<property::velocity>(new_ele) = dir2 * speed * 0.8;
             tag::get<property::random_seed>(new_ele) = R.get_rander().gen_seed();
-            insert_particle_in_context<e_tag>(ctx_acc, new_ele);
+            ctx_acc.template insert_particle<e_tag>(new_ele);
 
             Particle new_ion;
             tag::get<property::position>(new_ion) = tag::get<property::position>(p);
             auto dir3 = psum::random::RandFunction2D::RandV_spherical(R.get_rander());
             tag::get<property::velocity>(new_ion) = dir3 * 1e6;
             tag::get<property::random_seed>(new_ion) = R.get_rander().gen_seed();
-            insert_particle_in_context<Ar1_tag>(ctx_acc, new_ion);
+            ctx_acc.template insert_particle<Ar1_tag>(new_ion);
         }
 ```
 

@@ -205,19 +205,19 @@ The code state at the end of this stage can be found in `example/avalanche/stage
 
 Continue modifying `avalanche.cpp` from Stage 2:
 - Add the `Avalanche_mcc_model` struct; the `collide()` of the `col_ionization` collision type temporarily implements only the scattering redirection part (no new particles produced).
-- Create multi-species particle groups (atoms, ions) and their corresponding density fields.
+- Create the atom and ion particle groups and the background atom density field.
 - Call the collision model in the loop and observe the electron scattering behavior in the gas cloud.
 
-Before main, define the MCC model. It declares the species involved in collisions (electron, argon atom, argon ion) and provides a collision type `col_ionization`:
+Before main, define the MCC model with electrons as the incident species and argon atoms as the background species.
 
 ```cpp
 struct Avalanche_mcc_model {
     using e_tag = psum::particle_collision::species_tags::electron;
     using Ar_tag = psum::particle_collision::species_tags::Argon;
-    using Ar1_tag = psum::particle_collision::species_tags::Argon_pos_1;
-    using species_in_model = std::tuple<e_tag, Ar_tag, Ar1_tag>;
 
     struct col_ionization {
+        using incident_species_tag=e_tag;
+        using background_species_tag=Ar_tag;
         static double collision_cross_section(double v2) {
             return v2 > 4e12 ? 2e-20 : 0;
         }
@@ -238,45 +238,41 @@ struct Avalanche_mcc_model {
 Then provide a `make()` factory function that assembles the collision type into an executable MCC model and returns a lambda taking `dt`:
 
 ```cpp
-    static auto make(PG& electrons, PG& atoms, PG& ions,
-                     Field& ele_dens, Field& atom_dens, Field& ion_dens) {
+    static auto make(PG& electrons, PG& atoms, Field& atom_dens) {
         using namespace psum::particle_collision;
         using namespace psum::particle_collision::foundation;
 
-        using processor_type = collision_processor<density_interp_2d<Ar_tag>, std::tuple<col_ionization>>;
-        using all_col = mcc_model<mcc_submodel_for_incident<e_tag, processor_type>>;
-        using Ctx = standard_mccm_context<species_in_model, PG, Field>;
 
-        auto ctx = std::make_shared<Ctx>();
-        ctx->template get<e_tag>().bind(electrons, ele_dens);
-        ctx->template get<Ar_tag>().bind(atoms, atom_dens);
-        ctx->template get<Ar1_tag>().bind(ions, ion_dens);
+        using all_col = collision_model<col_ionization>;
+        using Ctx = species_contexts<all_col, PG, Field>;
+        struct Binding { PG* group; Field* density; };
+        auto ctx = std::make_shared<Ctx>(
+            Binding{&electrons, nullptr}, Binding{&atoms, &atom_dens});
 
         return [ctx](double dt) {
-            execute_mcc_model<all_col>(*ctx, dt);
-            execute_all_clean_buffers<species_in_model>(*ctx);
+            execute_collision_model<all_col>(*ctx, dt);
         };
     }
 };
 ```
 
-The assembly chain is compile-time: `collision_processor` (using argon-atom density interpolation as the probability density) → `mcc_submodel_for_incident` (electrons as incident particles) → `mcc_model`. At runtime one collision step is executed with `execute_mcc_model`.
+`collision_model` takes collision types directly; their incident and background species select the execution path at compile time. At runtime one collision step is executed with `execute_collision_model`.
 
-In main, create the atom and ion containers and their density fields (the atom density field shares the Stage 2 gas cloud):
+In main, create the atom and ion containers and the atom density field from the Stage 2 gas cloud.
 
 ```cpp
     PG electrons(q);
     PG atoms(q);
     PG ions(q);
 
-    Field ele_dens(q, grid), atom_dens(q, grid), ion_dens(q, grid);
+    Field atom_dens(q, grid);
     HField atom_host(grid);
 ```
 
 After the gas cloud initialization, create the collision model:
 
 ```cpp
-    auto mccm = Avalanche_mcc_model::make(electrons, atoms, ions, ele_dens, atom_dens, ion_dens);
+    auto mccm = Avalanche_mcc_model::make(electrons, atoms, atom_dens);
 ```
 
 Add an ion column to the `count.plt` header:
@@ -311,7 +307,7 @@ make avalanche
 After running you should see: `count.plt` (the ion column is always 0; electrons no longer fly straight out of the domain, so the steady-state count rises), `atom_dens.png`, terminal output of electron and ion counts.
 
 What you need to know at this stage:
-- The MCC type assembly chain is compile-time; at runtime it is executed via `execute_mcc_model<Model>(ctx, dt)`.
+- The MCC type assembly chain is compile-time; at runtime it is executed via `execute_collision_model<Model>(ctx, dt)`.
 - At this point `collide()` only changes the incident particle's direction of flight and energy; it does not produce new particles (the ionization part is completed in Stage 5).
 - The velocity decay factor ensures energy decreases; at low speed the cross section is zero, so collisions stop naturally.
 
@@ -376,11 +372,13 @@ The code state at the end of this stage can be found in `example/avalanche/stage
 ### Stage 5: Ionization Collision and Avalanche Cascade
 
 Continue modifying `avalanche.cpp` from Stage 4:
-- Complete the ionization part in `col_ionization::collide()`: produce secondary electrons and ions via `insert_particle_in_context`.
+- Derive `col_ionization` from `reaction_collision_tag`. Declare `consumed_species_tags = std::tuple<>` and `product_species_tags = std::tuple<e_tag, Ar1_tag>`, with `Ar1_tag` set to `species_tags::Argon_pos_1`.
+- Bind the ion species after the electrons and atoms in `make()`. The collision context uses the atom density field. Add an ion density field for plotting. In stage 5, call `execute_collision_model<all_col>(*ctx, dt)` to reserve space for both product species before sampling and insert them at the end of the step.
+- In `col_ionization::collide()`, call `insert_particle<Tag>` on the collision context to register secondary electrons and ions.
 - Add ion density field deposit and plot.
 - Change continuous injection to inject only during the first quarter of the time period.
 
-In `collide()`, after the scattering redirection, produce a secondary electron and an argon ion, writing them to the buffer via `insert_particle_in_context`:
+In `collide()`, after the scattering redirection, produce a secondary electron and an argon ion and write each to its species' product buffer.
 
 ```cpp
         static void collide(auto& p, const auto& ctx_acc) {
@@ -396,14 +394,14 @@ In `collide()`, after the scattering redirection, produce a secondary electron a
             auto dir2 = psum::random::RandFunction2D::RandV_spherical(R.get_rander());
             tag::get<property::velocity>(new_ele) = dir2 * speed * 0.8;
             tag::get<property::random_seed>(new_ele) = R.get_rander().gen_seed();
-            insert_particle_in_context<e_tag>(ctx_acc, new_ele);
+            ctx_acc.template insert_particle<e_tag>(new_ele);
 
             Particle new_ion;
             tag::get<property::position>(new_ion) = tag::get<property::position>(p);
             auto dir3 = psum::random::RandFunction2D::RandV_spherical(R.get_rander());
             tag::get<property::velocity>(new_ion) = dir3 * 1e6;
             tag::get<property::random_seed>(new_ion) = R.get_rander().gen_seed();
-            insert_particle_in_context<Ar1_tag>(ctx_acc, new_ion);
+            ctx_acc.template insert_particle<Ar1_tag>(new_ion);
         }
 ```
 

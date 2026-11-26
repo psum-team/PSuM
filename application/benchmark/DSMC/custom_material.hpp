@@ -73,7 +73,11 @@ public:
             Eigen::Vector3d new_vel;
 
             if (R() < default_sigma_)
+                {
                 new_vel = random::RandFunction3D::RandV_halfMaxw(R.get_rander(), norm, default_temperature_, default_mass_);
+                tag::get<tag::property::internal_energy>(p) = -1.380649e-23 * default_temperature_ *
+                    std::log(sycl::fmax(double(R()), 1e-300));
+                }
             else
                 new_vel = vel - 2.0 * vel.dot(norm) * norm;
 

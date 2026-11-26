@@ -2,8 +2,10 @@
 #define PSUM_TAG_FOUNDATION_HPP
 
 #include <tuple>
+#include <type_traits>
 #include <concepts>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace psum {
@@ -11,6 +13,26 @@ namespace psum {
 namespace tag {
 
 namespace foundation {
+
+    // Visit types in tuple order without constructing their values.
+    template<class Tuple,class Function>
+    constexpr void for_each_type(Function&& function) {
+        [&]<class... Types>(std::tuple<Types...>*) {
+            (static_cast<void>(function.template operator()<Types>()),...);
+        }(static_cast<Tuple*>(nullptr));
+    }
+
+    // Split types by Predicate<T>::value, preserving order and duplicates in both parts.
+    template<class Tuple,template<class> class Predicate>
+    struct partition_tuple;
+
+    template<class... Types,template<class> class Predicate>
+    struct partition_tuple<std::tuple<Types...>,Predicate> {
+        using matched=decltype(std::tuple_cat(std::declval<std::conditional_t<
+            Predicate<Types>::value,std::tuple<Types>,std::tuple<>>>()...));
+        using remaining=decltype(std::tuple_cat(std::declval<std::conditional_t<
+            Predicate<Types>::value,std::tuple<>,std::tuple<Types>>>()...));
+    };
 
     template <typename Item, typename Tuple>
     struct index_in_tuple;
@@ -72,8 +94,10 @@ namespace foundation {
         using first_back = typename First::back;
     
     public:
-        using tuple_front = decltype(std::tuple_cat(std::tuple<first_front>{}, typename rest::tuple_front()));
-        using tuple_back = decltype(std::tuple_cat(std::tuple<first_back>{}, typename rest::tuple_back()));
+        using tuple_front = decltype(std::tuple_cat(std::declval<std::tuple<first_front>>(),
+                                                    std::declval<typename rest::tuple_front>()));
+        using tuple_back = decltype(std::tuple_cat(std::declval<std::tuple<first_back>>(),
+                                                   std::declval<typename rest::tuple_back>()));
     };
 
     template <typename DualTuple, typename Front>

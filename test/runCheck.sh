@@ -29,7 +29,8 @@ uncategorized=0
 # under that directory instead of a wiped temp dir (used by CI evidence runs).
 if [ -n "${RUNCHECK_KEEP_LOGS:-}" ]; then
     results_dir="${RUNCHECK_KEEP_LOGS}"
-    mkdir -p "$results_dir"
+    mkdir -p "$results_dir" || exit 1
+    results_dir=$(cd "$results_dir" && pwd) || exit 1
 else
     results_dir=$(mktemp -d)
     trap "rm -rf $results_dir" EXIT
@@ -40,7 +41,7 @@ echo "=== Run Check (timeout=${TIMEOUT}s, jobs=${JOBS}) ==="
 if [ -n "${RUNCHECK_KEEP_LOGS:-}" ]; then echo "Per-target logs: $results_dir"; fi
 echo ""
 
-test_dirs=$(find . -name makefile -exec dirname {} \; | sed 's|^\./||' | sort)
+test_dirs=$(find . -type d -name build -prune -o -name makefile -exec dirname {} \; | sed 's|^\./||' | sort)
 
 while read dir; do
     if [ -z "$dir" ]; then
@@ -163,6 +164,10 @@ done <<< "$test_dirs"
 echo ""
 echo "================================"
 echo "Total: $total, Passed: $passed, Timeout (smoke): $timeouts, Compile Failed: $failed, Run Failed: $run_failed, Skipped (long/CI-unsuitable): $skipped, Delegated (MPI/Python): $delegated, Uncategorized: $uncategorized"
+if [ "$total" -ne $((passed + failed + run_failed + timeouts)) ]; then
+    echo "Incomplete results for compiled test targets"
+    exit 1
+fi
 if [ "$total" -eq 0 ]; then
     echo "❌ No tests were found/executed"
     exit 1

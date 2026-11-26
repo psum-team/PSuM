@@ -2,13 +2,18 @@
 #define PSUM_PARTICLE_COLLISION_COULOMB_COLLISION_SOLVER_HPP
 
 #include <cmath>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <random>
 #include <vector>
 #include <algorithm>
 
 #include <sycl/sycl.hpp>
 #include <Eigen/Core>
+#include "../../include/psum/particle_container.hpp"
 #include "../field/device_field.hpp"
-#include "device_exclusive_scan.hpp"
+#include <AdaptiveCpp/algorithms/numeric.hpp>
 #include "../random.hpp"
 #include "../timer.hpp"
 
@@ -48,11 +53,17 @@ namespace particle_collision {
         }
     }
 
+    inline double coulomb_cross_section_limit(double max_density) {
+        if (max_density == 0.0) return 0.0;
+        // Limit the mean free path to the interparticle spacing of the denser species.
+        return std::cbrt((4.0 * M_PI / 3.0) * max_density) / max_density;
+    }
+
     template <typename Rander>
     inline void scattering_NanBu(
         Eigen::Vector3d& v1, Eigen::Vector3d& v2,
         double mass1, double mass2, double charge1, double charge2,
-        double density, double lambdaD, double dt,
+        double density, double sigma_max, double lambdaD, double dt,
         Rander& R
     ) {
         constexpr double H_BAR = 1.054571817e-34;
@@ -65,9 +76,10 @@ namespace particle_collision {
         const double m12 = mass1 * mass2 / (mass1 + mass2);
         const double b_min = std::max(H_BAR / (m12 * un), std::abs(charge1 * charge2) / (un * un * 4 * M_PI * EPSILON0 * m12));
         const double lambda = std::max(lambdaD / b_min, 1.01);
-        const double s = std::log(lambda) / 4 / M_PI *
+        const double s_uncapped = std::log(lambda) / 4 / M_PI *
             std::pow((charge1 * charge2) / (EPSILON0 * m12), 2) *
             density * std::pow(un, -3) * dt;
+        const double s = std::min(s_uncapped, sigma_max * density * un * dt);
 
         double cos_theta;
         if (s == 0.0) return;
@@ -96,428 +108,285 @@ namespace particle_collision {
         v2 -= m12 / mass2 * delta_u;
     }
 
+    template <typename Rander>
+    inline void scattering_NanBu(
+        Eigen::Vector3d& v1, Eigen::Vector3d& v2,
+        double mass1, double mass2, double charge1, double charge2,
+        double density, double lambdaD, double dt, Rander& random
+    ) {
+        scattering_NanBu(v1, v2, mass1, mass2, charge1, charge2, density,
+                         coulomb_cross_section_limit(density), lambdaD, dt, random);
+    }
+
+enum class coulomb_role { electron, ion };
+
 template<typename Particle, template<typename> typename Validator, int Dim>
 class coulomb_collision_solver {
     static constexpr double EPSILON0 = 8.854187817e-12;
     static constexpr double ELECTRON_CHARGE = 1.602176634e-19;
 
     using ParticleGroup = psum::particle_container::particle_group<Particle, Validator>;
+    using TemperatureField = field::device_field<Dim, field::var_loc::cellCentered, double>;
     using Grid = psum::field::simple_grid<Dim>;
     using pos_tag = psum::tag::property::position;
     using random_seed_tag = psum::tag::property::random_seed;
 
+    // SplitMix64 finalizer gives successive pool index builds distinct permutation keys.
+    static std::uint64_t mix(std::uint64_t x) {
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+        return x ^ (x >> 31);
+    }
+
+    std::uint64_t pairing_epoch_;
     sycl::queue q_;
     Grid grid_;
     field::device_field<Dim, field::var_loc::cellCentered, double> lambdaD_;
     size_t num_cells_;
-    device_exclusive_scan_context<size_t> scan_ctx_;
-    field::device_array<size_t> counters_temp_;
+    acpp::algorithms::util::allocation_cache scan_cache_{acpp::algorithms::util::allocation_type::device};
 
-    struct species_data {
-        field::device_array<size_t> sorted_indices;
-        field::device_array<size_t> cell_offsets;
-        field::device_array<size_t> cell_counts;
-        field::device_array<uint32_t> particle_cell_index;
-        field::device_array<double> density;
-        size_t capacity = 0;
-
-        species_data(sycl::queue& q, size_t n_cells, size_t n_particles)
-            : sorted_indices(q, std::max(n_particles, size_t(1))),
-              cell_offsets(q, n_cells + 1),
-              cell_counts(q, n_cells),
-              particle_cell_index(q, std::max(n_particles, size_t(1))),
-              density(q, n_cells),
-              capacity(std::max(n_particles, size_t(1))) {}
-
-        void ensure_capacity(sycl::queue& q, size_t n_particles) {
-            if (n_particles <= capacity) return;
-            size_t new_cap = std::max(n_particles * 2, size_t(8192));
-            sorted_indices = field::device_array<size_t>(q, new_cap);
-            particle_cell_index = field::device_array<uint32_t>(q, new_cap);
-            capacity = new_cap;
-            q.wait();
-        }
+public:
+    // Pooling assumes equal macro-particle weights across the bound species.
+    // The group and cell-centered temperature field (eV) must outlive the solver.
+    struct species_binding {
+        ParticleGroup& group;
+        coulomb_role role;
+        double mass, charge; // kg, C
+        std::reference_wrapper<const TemperatureField> temperature;
     };
 
-    std::vector<ParticleGroup*> particles_vec_;
-    std::vector<std::unique_ptr<species_data>> cached_species_;
+private:
+    struct species_view {
+        Particle* particles;
+        const double* temperature;
+        double mass, charge;
+        size_t begin, end;
+        coulomb_role role;
+    };
 
-    void build_species_index(species_data& sd, ParticleGroup& pg) {
-        auto& data_content = pg.get_content();
-        size_t n_data = data_content.size();
-        size_t n_valid = pg.size();
+    struct slot {
+        size_t index;
+        uint32_t species, cell;
+    };
 
-        Tic("   build_index_fill_zero")
-        sd.cell_counts.fill(0);
-        counters_temp_.fill(0);
-        q_.wait();
-        Toc_("   build_index_fill_zero")
+    struct pool {
+        field::device_array<slot> slots;
+        field::device_array<size_t> counts, offsets;
+        field::device_array<double> density;
+        size_t extent = 0, indexed = 0;
 
-        if (n_data == 0 || n_valid == 0) {
-            sd.cell_offsets.fill(0);
-            sd.density.fill(0.0);
-            q_.wait();
-            return;
-        }
+        pool(sycl::queue& q, size_t cells)
+            : slots(q, 1), counts(q, cells + 1), offsets(q, cells + 1), density(q, cells) {}
+    };
 
-        sd.ensure_capacity(q_, n_valid);
+    std::vector<species_binding> bindings_;
+    std::vector<species_view> host_views_;
+    field::device_array<species_view> species_;
+    field::device_array<size_t> species_counts_;
+    field::device_array<double> species_density_;
+    pool ions_, electrons_;
 
-        Tic("   build_index_count_kernel")
-        q_.submit([&](sycl::handler& h) {
-            auto data_acc = data_content.get_access(h);
-            auto counts_ptr = sd.cell_counts.data();
-            auto g = grid_;
-            h.parallel_for(sycl::range<1>(n_data), [=](sycl::id<1> idx) {
-                Particle& p = data_acc[idx];
-                if (!Validator<Particle>::is_valid(p)) return;
-                auto pos = psum::tag::get<pos_tag>(p);
-                if (g.inGrid(pos)) {
-                    uint32_t cid = static_cast<uint32_t>(g.c2i(g.nC(pos)));
-                    sycl::atomic_ref<size_t, sycl::memory_order::relaxed,
-                                    sycl::memory_scope::device,
-                                    sycl::access::address_space::global_space> ref(counts_ptr[cid]);
-                    ref.fetch_add(1);
-                }
-            });
-        }).wait();
-        Toc_("   build_index_count_kernel")
-
-        Tic("   build_index_exclusive_scan")
-        size_t total = exclusive_scan_device<size_t>(
-            scan_ctx_, sd.cell_counts.data(), sd.cell_offsets.data(), num_cells_);
-
-        q_.memcpy(sd.cell_offsets.data() + num_cells_, &total, sizeof(size_t)).wait();
-        Toc_("   build_index_exclusive_scan")
-
-        Tic("   build_index_fill_zero2")
-        counters_temp_.fill(0);
-        q_.wait();
-        Toc_("   build_index_fill_zero2")
-
-        Tic("   build_index_sort_kernel")
-        q_.submit([&](sycl::handler& h) {
-            auto data_acc = data_content.get_access(h);
-            auto sorted_acc = sd.sorted_indices.get_access(h);
-            auto pci_acc = sd.particle_cell_index.get_access(h);
-            auto offsets_ptr = sd.cell_offsets.data();
-            auto ctr_ptr = counters_temp_.data();
-            auto g = grid_;
-            h.parallel_for(sycl::range<1>(n_data), [=](sycl::id<1> idx) {
-                Particle& p = data_acc[idx];
-                if (!Validator<Particle>::is_valid(p)) return;
-                auto pos = psum::tag::get<pos_tag>(p);
-                if (g.inGrid(pos)) {
-                    uint32_t cid = static_cast<uint32_t>(g.c2i(g.nC(pos)));
-                    sycl::atomic_ref<size_t, sycl::memory_order::relaxed,
-                                    sycl::memory_scope::device,
-                                    sycl::access::address_space::global_space> ref(ctr_ptr[cid]);
-                    size_t local_idx = ref.fetch_add(1);
-                    size_t sorted_pos = offsets_ptr[cid] + local_idx;
-                    sorted_acc[sorted_pos] = idx;
-                    pci_acc[sorted_pos] = cid;
-                }
-            });
-        }).wait();
-        Toc_("   build_index_sort_kernel")
-    }
+    using counter = sycl::atomic_ref<size_t, sycl::memory_order::relaxed, sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>;
 
     template<typename Num2Dens>
-    void compute_density_on_device(species_data& sd, Num2Dens num2dens) {
-        auto* counts_ptr = sd.cell_counts.data();
-        auto* dens_ptr = sd.density.data();
-        auto nc = num_cells_;
-        q_.submit([&](sycl::handler& h) {
-            h.parallel_for(sycl::range<1>(nc), [=](sycl::id<1> i) {
-                dens_ptr[i[0]] = num2dens(i[0], counts_ptr[i[0]]);
-            });
+    void prepare_species(Num2Dens num2dens) {
+        ions_.extent = electrons_.extent = 0;
+        species_counts_.fill(0);
+        const auto grid = grid_;
+        for (size_t s = 0; s < bindings_.size(); ++s) {
+            const auto& [group, role, mass, charge, temperature] = bindings_[s];
+            auto& extent = role == coulomb_role::ion ? ions_.extent : electrons_.extent;
+            auto* data = group.get_content().data(); // Includes the host overflow check.
+            const size_t n = group.extent();
+            host_views_[s] = {data, temperature.get().data(), mass, charge, extent, extent + n, role};
+            extent += n;
+            if (!n) continue;
+            auto* counts = species_counts_.data() + s * num_cells_;
+            q_.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
+                const auto& particle = data[i[0]];
+                if (!Validator<Particle>::is_valid(particle)) return;
+                const auto pos = psum::tag::get<pos_tag>(particle);
+                if (grid.inGrid(pos)) counter(counts[grid.c2i(grid.nC(pos))]).fetch_add(1);
+            }).wait();
+        }
+        species_.copy(host_views_);
+        const auto* views = species_.data();
+        const auto* counts = species_counts_.data();
+        auto* densities = species_density_.data();
+        auto* ic = ions_.counts.data();
+        auto* ec = electrons_.counts.data();
+        auto* idens = ions_.density.data();
+        auto* edens = electrons_.density.data();
+        auto* ld = lambdaD_.data();
+        const size_t cells = num_cells_, ns = bindings_.size();
+        q_.parallel_for(sycl::range<1>(cells + 1), [=](sycl::id<1> item) {
+            const size_t c = item[0];
+            size_t ni = 0, ne = 0;
+            double di = 0, de = 0, sum = 0;
+            if (c < cells) {
+                for (size_t s = 0; s < ns; ++s) {
+                    const size_t at = s * cells + c;
+                    const double n = num2dens(c, counts[at]);
+                    densities[at] = n;
+                    if (views[s].role == coulomb_role::ion) { ni += counts[at]; di += n; }
+                    else { ne += counts[at]; de += n; }
+                    const double t = views[s].temperature[c], q = views[s].charge;
+                    if (t > 0 && std::isfinite(n) && n > 0) {
+                        const double term = n * (q*q) / (EPSILON0 * ELECTRON_CHARGE * t);
+                        if (std::isfinite(term)) sum += term;
+                    }
+                }
+                idens[c] = di;
+                edens[c] = de;
+                ld[c] = sum == 0 ? NAN : std::sqrt(1.0 / sum);
+            }
+            ic[c] = ni;
+            ec[c] = ne;
         }).wait();
     }
 
-    void compute_debye_length_on_device(
-        const std::vector<species_data*>& species_arr,
-        const std::vector<double>& charges,
-        const std::vector<const double*>& temp_dev_ptrs)
-    {
-        field::device_array<double> lambdaD_inv_sq(q_, num_cells_);
-        lambdaD_inv_sq.fill(0.0);
-        q_.wait();
-
-        for (size_t sp = 0; sp < species_arr.size(); sp++) {
-            double cc = charges[sp] * charges[sp];
-            const double* dens_ptr = species_arr[sp]->density.data();
-            const double* temp_ptr = temp_dev_ptrs[sp];
-
-            q_.submit([&](sycl::handler& h) {
-                auto ldis_ptr = lambdaD_inv_sq.data();
-                auto nc = num_cells_;
-                h.parallel_for(sycl::range<1>(nc), [=](sycl::id<1> i) {
-                    double dens = dens_ptr[i[0]];
-                    double T_val = temp_ptr[i[0]];
-                    if (T_val > 0 && std::isfinite(dens) && dens > 0) {
-                        double lbd_i = dens * cc / (EPSILON0 * ELECTRON_CHARGE * T_val);
-                        if (std::isfinite(lbd_i))
-                            ldis_ptr[i[0]] += lbd_i;
-                    }
-                });
-            });
-        }
-        q_.wait();
-
-        q_.submit([&](sycl::handler& h) {
-            auto ld_ptr = lambdaD_.data();
-            auto ldis_ptr = lambdaD_inv_sq.data();
-            auto nc = num_cells_;
-            h.parallel_for(sycl::range<1>(nc), [=](sycl::id<1> i) {
-                double val = ldis_ptr[i[0]];
-                ld_ptr[i[0]] = (val == 0.0) ? NAN : std::sqrt(1.0 / val);
-            });
+    void build_index(pool& p, coulomb_role role) {
+        p.indexed = 0;
+        if (!p.extent) return;
+        auto* counts = p.counts.data();
+        auto* offsets = p.offsets.data();
+        acpp::algorithms::util::allocation_group scratch{&scan_cache_, q_.get_device()};
+        auto scan = acpp::algorithms::exclusive_scan(q_, scratch, counts, counts + num_cells_ + 1,
+                                                    offsets, size_t{0});
+        q_.memcpy(&p.indexed, offsets + num_cells_, sizeof(size_t), scan).wait();
+        if (!p.indexed) return;
+        if (p.indexed > p.slots.size())
+            p.slots = field::device_array<slot>(q_, std::max(p.indexed, p.slots.size() + p.slots.size()/2));
+        p.counts.fill(0);
+        // Consecutive keys can give several rounds the same set of hash inputs
+        // for a small right half, biasing adjacent pairs after serial binning.
+        const auto seed = mix(++pairing_epoch_);
+        const particle_container::detail::slot_permutation order(p.extent,
+            {mix(seed), mix(seed + 1), mix(seed + 2), mix(seed + 3)});
+        auto* slots = p.slots.data();
+        const auto* views = species_.data();
+        const auto grid = grid_;
+        const size_t ns = bindings_.size();
+        q_.parallel_for(sycl::range<1>(p.extent), [=](sycl::id<1> item) {
+            const size_t k = order(item[0]);
+            for (uint32_t s = 0; s < ns; ++s) {
+                const auto& view = views[s];
+                // begin/end are offsets in this role's concatenated slot range.
+                if (view.role != role || k >= view.end) continue;
+                const size_t index = k - view.begin;
+                const auto& particle = view.particles[index];
+                if (!Validator<Particle>::is_valid(particle)) return;
+                const auto pos = psum::tag::get<pos_tag>(particle);
+                if (grid.inGrid(pos)) {
+                    const auto c = static_cast<uint32_t>(grid.c2i(grid.nC(pos)));
+                    slots[offsets[c] + counter(counts[c]).fetch_add(1)] = {index, s, c};
+                }
+                return;
+            }
         }).wait();
+    }
+
+    // Both pools use the same within-pool matching. All callbacks see the real species.
+    template<bool Within, typename P2V, typename V2P>
+    void collide(const pool& first, const pool& second, double dt, P2V read, V2P write,
+                 std::optional<sycl::event>& previous) {
+        if (!first.indexed || !second.indexed || (Within && first.indexed < 2)) return;
+        const auto *a = first.slots.data(), *b = second.slots.data();
+        const auto *ao = first.offsets.data(), *bo = second.offsets.data();
+        const auto *ac = first.counts.data(), *bc = second.counts.data();
+        const auto *ad = first.density.data(), *bd = second.density.data();
+        const auto* views = species_.data();
+        const auto* densities = species_density_.data();
+        const auto* debye = lambdaD_.data();
+        const size_t cells = num_cells_;
+        const auto key = mix(pairing_epoch_);
+        previous = q_.submit([&](sycl::handler& h) {
+            if (previous) h.depends_on(*previous);
+            h.parallel_for(sycl::range<1>(first.indexed), [=](sycl::id<1> item) {
+                const auto c = a[item[0]].cell;
+                const size_t j = item[0] - ao[c], na = ac[c], nb = bc[c];
+                double density = Within ? ad[c] : std::max(ad[c], bd[c]);
+                // Each particle has na - 1 possible partners within its pool in this cell.
+                if constexpr (Within) density *= static_cast<double>(na - 1) / na;
+                auto scatter = [&](size_t i, size_t k, double step) {
+                    const slot x = a[ao[c]+i], y = b[bo[c]+k];
+                    const auto& sx = views[x.species];
+                    const auto& sy = views[y.species];
+                    const double limit = coulomb_cross_section_limit(std::max(
+                        densities[x.species*cells+c], densities[y.species*cells+c]));
+                    auto& p = sx.particles[x.index];
+                    auto& partner = sy.particles[y.index];
+                    auto v = read(p), w = read(partner);
+                    auto& seed = psum::tag::get<random_seed_tag>(p);
+                    psum::random::rander random(seed);
+                    scattering_NanBu(v,w,sx.mass,sy.mass,sx.charge,sy.charge,density,limit,debye[c],step,random);
+                    if (x.species != y.species) seed = random.get_engine()();
+                    write(p,v);
+                    write(partner,w);
+                    if (x.species == y.species) seed = random.get_engine()();
+                };
+                if constexpr (Within) {
+                    if (j >= na/2) return;
+                    if (na%2 && j == 0) {
+                        for (size_t k=0; k<3; ++k) scatter(k,(k+1)%3,dt/2);
+                    } else {
+                        const size_t k = 2*j + na%2;
+                        scatter(k,k+1,dt);
+                    }
+                } else {
+                    if (j >= nb) return;
+                    // Take one distinct partner per endpoint, even for unequal pool sizes.
+                    const auto shift = mix(key ^ mix(c));
+                    scatter((j+shift%na)%na,(j+mix(shift)%nb)%nb,dt);
+                }
+            });
+        });
     }
 
 public:
     auto& lambdaD() { return lambdaD_; }
 
-    coulomb_collision_solver(sycl::queue& q, const Grid& grid,
-                             const std::vector<ParticleGroup*>& species)
-        : q_(q), grid_(grid), lambdaD_(q, grid),
-          num_cells_(grid.contentSize(field::var_loc::cellCentered)),
-          scan_ctx_(), counters_temp_(q, grid.contentSize(field::var_loc::cellCentered)) {
-        scan_ctx_.init(q_);
-        for (auto* sp : species) {
-            particles_vec_.push_back(sp);
-        }
-        for (size_t i = 0; i < particles_vec_.size(); i++) {
-            cached_species_.push_back(std::make_unique<species_data>(
-                q_, num_cells_, particles_vec_[i]->size()));
-        }
+    coulomb_collision_solver(sycl::queue& q, const Grid& grid, const std::vector<species_binding>& species,
+                             std::uint64_t pairing_seed = std::random_device{}())
+        : pairing_epoch_(mix(pairing_seed)), q_(q), grid_(grid), lambdaD_(q,grid),
+          num_cells_(grid.contentSize(field::var_loc::cellCentered)), bindings_(species),
+          host_views_(species.size()), species_(q,std::max<size_t>(species.size(),1)),
+          species_counts_(q,std::max<size_t>(species.size()*num_cells_,1)),
+          species_density_(q,std::max<size_t>(species.size()*num_cells_,1)),
+          ions_(q,num_cells_), electrons_(q,num_cells_) {
+        for (size_t i=0; i<bindings_.size(); ++i)
+            for (size_t j=0; j<i; ++j)
+                if (&bindings_[i].group == &bindings_[j].group)
+                    throw std::invalid_argument("duplicate particle group in Coulomb solver");
     }
 
     coulomb_collision_solver(const coulomb_collision_solver&) = delete;
     coulomb_collision_solver& operator=(const coulomb_collision_solver&) = delete;
 
-    template<typename P2V, typename V2P>
-    double collide_in_species(
-        ParticleGroup& pg, species_data& sd,
-        double mass, double charge, double dt,
-        P2V func, V2P v2p
-    ) {
-        size_t n = pg.size();
-        if (n <= 1) return 0.0;
-
-        auto& data_content = pg.get_content();
-
-        q_.submit([&](sycl::handler& h) {
-            auto data_acc = data_content.get_access(h);
-            auto sorted_acc = sd.sorted_indices.get_access(h);
-            auto pci_acc = sd.particle_cell_index.get_access(h);
-            auto offset_ptr = sd.cell_offsets.data();
-            auto count_ptr = sd.cell_counts.data();
-            auto dens_ptr = sd.density.get_access(h);
-            auto ld_ptr = lambdaD_.data();
-
-            h.parallel_for(sycl::range<1>(n), [=](sycl::id<1> item) {
-                size_t i = item[0];
-                uint32_t cell_id = pci_acc[i];
-                size_t pnum = count_ptr[cell_id];
-                if (pnum <= 1) return;
-                bool mode = (pnum % 2 == 0);
-                size_t num_collision = pnum / 2;
-                size_t j = i - offset_ptr[cell_id];
-                if (j >= num_collision) return;
-                size_t offset = offset_ptr[cell_id];
-                double density = dens_ptr[cell_id];
-                double ld = ld_ptr[cell_id];
-
-                Particle *p1, *p2;
-                if (mode) {
-                    p1 = &data_acc[sorted_acc[offset + j * 2]];
-                    p2 = &data_acc[sorted_acc[offset + j * 2 + 1]];
-                } else {
-                    p1 = &data_acc[sorted_acc[offset + j * 2 + 1]];
-                    p2 = &data_acc[sorted_acc[offset + j * 2 + 2]];
-                }
-
-                if (mode || j >= 1) {
-                    auto v1 = func(*p1);
-                    auto v2 = func(*p2);
-                    psum::random::rander R(psum::tag::get<random_seed_tag>(*p1));
-                    scattering_NanBu(v1, v2, mass, mass, charge, charge,
-                                     density, ld, dt, R);
-                    v2p(*p1, v1);
-                    v2p(*p2, v2);
-                    psum::tag::get<random_seed_tag>(*p1) = R.get_engine()();
-                } else {
-                    for (int k = 0; k < 3; k++) {
-                        p1 = &data_acc[sorted_acc[offset + k]];
-                        p2 = &data_acc[sorted_acc[offset + (k + 1) % 3]];
-                        auto v1 = func(*p1);
-                        auto v2 = func(*p2);
-                        psum::random::rander R(psum::tag::get<random_seed_tag>(*p1));
-                        scattering_NanBu(v1, v2, mass, mass, charge, charge,
-                                         density, ld, dt/2, R);
-                        v2p(*p1, v1);
-                        v2p(*p2, v2);
-                        psum::tag::get<random_seed_tag>(*p1) = R.get_engine()();
-                    }
-                }
-            });
-        }).wait();
-        return 0.0;
-    }
-
-    template<typename P2V, typename V2P>
-    double collide_between_species(
-        ParticleGroup& pg0, ParticleGroup& pg1,
-        species_data& sd0, species_data& sd1,
-        double mass0, double charge0, double mass1, double charge1,
-        double dt, P2V func, V2P v2p
-    ) {
-        auto& data0 = pg0.get_content();
-        auto& data1 = pg1.get_content();
-        size_t n0 = pg0.size();
-        if (n0 == 0) return 0.0;
-
-        q_.submit([&](sycl::handler& h) {
-            auto d0 = data0.get_access(h);
-            auto d1 = data1.get_access(h);
-            auto s0 = sd0.sorted_indices.get_access(h);
-            auto s1 = sd1.sorted_indices.get_access(h);
-            auto pci0 = sd0.particle_cell_index.get_access(h);
-            auto o0 = sd0.cell_offsets.data();
-            auto o1 = sd1.cell_offsets.data();
-            auto c0 = sd0.cell_counts.data();
-            auto c1 = sd1.cell_counts.data();
-            auto dens0_ptr = sd0.density.data();
-            auto dens1_ptr = sd1.density.data();
-            auto ld_ptr = lambdaD_.data();
-            auto nc = num_cells_;
-
-            h.parallel_for(sycl::range<1>(n0), [=](sycl::id<1> item) {
-                size_t i = item[0];
-                if (i >= o0[nc]) return;
-
-                uint32_t cid = pci0[i];
-                size_t pnum0 = c0[cid];
-                size_t pnum1 = c1[cid];
-                if (pnum0 == 0 || pnum1 == 0) return;
-
-                size_t off0 = o0[cid];
-                size_t off1 = o1[cid];
-                size_t j = i - off0;
-                if (j >= pnum0 || j >= pnum1) return;
-
-                double density = (dens0_ptr[cid] < dens1_ptr[cid])
-                                 ? dens0_ptr[cid] : dens1_ptr[cid];
-                double ld = ld_ptr[cid];
-
-                if (pnum0 >= pnum1) {
-                    size_t num_rounds = pnum0 / pnum1;
-                    for (size_t round = 0; round <= num_rounds; round++){
-                        size_t idx0 = j + round * pnum1;
-                        if (idx0 >= pnum0) return;
-                        Particle& pA = d0[s0[off0 + idx0]];
-                        Particle& pB = d1[s1[off1 + j]];
-
-                        auto v1 = func(pA);
-                        auto v2 = func(pB);
-
-                        psum::random::rander R(psum::tag::get<random_seed_tag>(pA));
-                        scattering_NanBu(v1, v2, mass0, mass1, charge0, charge1,
-                                        density, ld, dt, R);
-                        psum::tag::get<random_seed_tag>(pA) = R.get_engine()();
-
-                        v2p(pA, v1);
-                        v2p(pB, v2);
-                    }
-                } else {
-                    size_t num_rounds = pnum1 / pnum0;
-                    for (size_t round = 0; round <= num_rounds; round++) {
-                        size_t idx1 = j + round * pnum0;
-                        if (idx1 >= pnum1) break;
-
-                        Particle& pA = d0[s0[off0 + j]];
-                        Particle& pB = d1[s1[off1 + idx1]];
-
-                        auto v1 = func(pA);
-                        auto v2 = func(pB);
-                        psum::random::rander R(psum::tag::get<random_seed_tag>(pA));
-                        scattering_NanBu(v1, v2, mass0, mass1, charge0, charge1,
-                                         density, ld, dt, R);
-                        psum::tag::get<random_seed_tag>(pA) = R.get_engine()();
-                        v2p(pA, v1);
-                        v2p(pB, v2);
-                    }
-                }
-            });
-        }).wait();
-        return 0.0;
-    }
-
     template<typename P2V, typename V2P, typename Num2Dens>
-    double solve(
-        double dt,
-        Num2Dens num2dens,
-        const std::vector<const double*>& temp_dev_ptrs,
-        const std::vector<double>& masses,
-        const std::vector<double>& charges,
-        P2V func, V2P v2p
-    ) {
-        size_t n_species = particles_vec_.size();
-        if (n_species != masses.size() || n_species != charges.size() || n_species != temp_dev_ptrs.size()) {
-            throw std::runtime_error("Error: species count mismatch in coulomb_collision_solver::solve");
-        }
-
-        std::vector<species_data*> species_ptrs;
+    double solve(double dt, Num2Dens num2dens, P2V read, V2P write) {
+        if (bindings_.empty()) { lambdaD_.setConstant(NAN); return 0.0; }
 
         Tic(" solve_total")
-        for (size_t sp = 0; sp < n_species; sp++) {
-            size_t n_valid = particles_vec_[sp]->size();
-            if (cached_species_[sp]->capacity < n_valid + 16) {
-                cached_species_[sp] = std::make_unique<species_data>(q_, num_cells_, n_valid);
-            }
-            species_data* sd = cached_species_[sp].get();
-            species_ptrs.push_back(sd);
-
-            Tic("  solve_build_index")
-            build_species_index(*sd, *particles_vec_[sp]);
-            Toc_("  solve_build_index")
-
-            Tic("  solve_density")
-            compute_density_on_device(*sd, num2dens);
-            Toc_("  solve_density")
-        }
-
-        Tic("  solve_debye")
-        compute_debye_length_on_device(species_ptrs, charges, temp_dev_ptrs);
-        Toc_("  solve_debye")
-
+        Tic("  solve_density")
+        prepare_species(num2dens);
+        Toc_("  solve_density")
+        Tic("  solve_build_index")
+        build_index(ions_,coulomb_role::ion);
+        build_index(electrons_,coulomb_role::electron);
+        Toc_("  solve_build_index")
         Tic("  solve_collide")
-        for (size_t i = 0; i < n_species; i++) {
-            double mass = masses[i];
-            double charge = charges[i];
-            Tic("   solve_collide_species")
-            collide_in_species(*particles_vec_[i], *species_ptrs[i],
-                               mass, charge, dt, func, v2p);
-            Toc
-            for (size_t j = i + 1; j < n_species; j++) {
-                double mass1 = masses[j];
-                double charge1 = charges[j];
-                Tic("   solve_collide_between_species")
-                collide_between_species(*particles_vec_[i], *particles_vec_[j],
-                                        *species_ptrs[i], *species_ptrs[j],
-                                        mass, charge, mass1, charge1,
-                                        dt, func, v2p);
-                Toc
-            }
-        }
+        std::optional<sycl::event> previous;
+        collide<true>(ions_,ions_,dt,read,write,previous);
+        collide<true>(electrons_,electrons_,dt,read,write,previous);
+        collide<false>(electrons_,ions_,dt,read,write,previous);
+        if (previous) previous->wait();
         Toc_("  solve_collide")
         Toc_(" solve_total")
-
         return 0.0;
     }
 };
-
 }
-
 }
 #endif

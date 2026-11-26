@@ -1,0 +1,49 @@
+{
+  "name": "N2FlatPlate",
+  "domain_m": [
+    [
+      0,
+      0.175
+    ],
+    [
+      -0.075,
+      0.075
+    ],
+    [
+      0,
+      0.005
+    ]
+  ],
+  "grid": [
+    350,
+    300,
+    1
+  ],
+  "plate_m": [
+    [
+      0.05,
+      0.15
+    ],
+    [
+      -0.0025,
+      0.0025
+    ]
+  ],
+  "n_m3": 3.716e+20,
+  "velocity_ms": [
+    1503,
+    0,
+    0
+  ],
+  "Ttrans_K": 13.32,
+  "Trot_K": 13.32,
+  "wall_K": 290,
+  "diffuse_fraction": 0.8,
+  "dt_s": 2e-08,
+  "pilot_steps": 2500,
+  "pilot_seed": 1101,
+  "pilot_weight": 100000000000.0,
+  "reference": "SPARTA/cases/N2FlatPlate/results/plate-20261116",
+  "acceptance": "transient comparison only; not full equivalence",
+  "collision_path": "Historical 2026-11-17 run: execute_dpmcc_model, legacy request sampling, whole-group shuffle every 20 steps"
+}

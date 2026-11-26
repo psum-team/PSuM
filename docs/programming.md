@@ -361,10 +361,11 @@ PSuM 的碰撞模块主要包括：
 简化流程：
 
 ```text
-prepare species contexts
-execute_mcc_model<Model>(ctx, dt)
-execute_all_clean_buffers<SpeciesTuple>(ctx)
+绑定物种上下文；模型含 DPMCC 时，与通道上下文组合成 ctx
+execute_collision_model<Model>(ctx, dt)
 ```
+
+完整入口在碰撞前预留产物容量，执行 MCC 和所有延迟配对，最后统一回填产物。单独使用入射阶段接口时，调用方需自行管理容量、延迟配对和回填。
 
 自定义碰撞截面、通道选择和配对算法通常较长，不适合放在主教程里；完整写法可参考[示例总览](examples.md)与 `application/` 下的具体应用。
 

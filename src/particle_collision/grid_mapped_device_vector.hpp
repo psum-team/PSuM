@@ -8,7 +8,7 @@
 #include <sycl/sycl.hpp>
 #include "../../include/psum/particle_container.hpp"
 #include "../field/device_array.hpp"
-#include "device_exclusive_scan.hpp"
+#include <AdaptiveCpp/algorithms/numeric.hpp>
 
 namespace psum {
 
@@ -21,8 +21,7 @@ namespace particle_collision {
         psum::field::device_array<size_t> prefix_sum_;
         psum::field::device_array<size_t> partition_sizes_;
         psum::field::device_array<size_t> partition_counters_;
-        device_exclusive_scan_context<size_t> scan_ctx_;
-        size_t *sum_shared;
+        acpp::algorithms::util::allocation_cache scan_cache_{acpp::algorithms::util::allocation_type::device};
         Grid grid_;
     public:
         grid_mapped_device_vector(sycl::queue q, Grid g): data_(q), prefix_sum_(q), partition_sizes_(q), partition_counters_(q), grid_(g) {
@@ -30,15 +29,9 @@ namespace particle_collision {
             size_t n_cells = 1;
             for(auto n : n_cells_on_dim)
                 n_cells *= n;
-            prefix_sum_ = psum::field::device_array<size_t>(q, n_cells);
-            partition_sizes_ = psum::field::device_array<size_t>(q, n_cells);
+            prefix_sum_ = psum::field::device_array<size_t>(q, n_cells + 1);
+            partition_sizes_ = psum::field::device_array<size_t>(q, n_cells + 1);
             partition_counters_ = psum::field::device_array<size_t>(q, n_cells);
-            scan_ctx_.init(q);
-
-            sum_shared = sycl::malloc_shared<size_t>(1, q);
-        }
-        ~grid_mapped_device_vector() {
-            sycl::free(sum_shared, data_.get_queue());
         }
         void update(psum::particle_container::device_vector<std::pair<Position, Data>>& input_data) {
             auto q = input_data.get_queue();
@@ -47,7 +40,7 @@ namespace particle_collision {
             }
             
             size_t n = input_data.size();
-            size_t num_cells = partition_sizes_.size();
+            size_t num_cells = partition_counters_.size();
 
             partition_sizes_.fill(0);
             partition_counters_.fill(0);
@@ -67,9 +60,16 @@ namespace particle_collision {
                 });
             }).wait();
 
-            *sum_shared = exclusive_scan_device<size_t>(scan_ctx_, partition_sizes_.data(), prefix_sum_.data(), num_cells);
-
-            data_.resize(*sum_shared);
+            size_t total;
+            {
+                auto* counts = partition_sizes_.data();
+                auto* offsets = prefix_sum_.data();
+                acpp::algorithms::util::allocation_group scratch{&scan_cache_, q.get_device()};
+                auto scanned = acpp::algorithms::exclusive_scan(q, scratch, counts, counts + num_cells + 1,
+                                                                offsets, size_t{0});
+                q.memcpy(&total, offsets + num_cells, sizeof(total), scanned).wait();
+            }
+            data_.resize(total);
 
             q.submit([&](sycl::handler& h) {
                 auto in_acc = input_data.get_access(h);
@@ -106,7 +106,7 @@ namespace particle_collision {
                 data_(data) {}
 
             inline size_t num_partitions() const {
-                return prefix_sum_.size();
+                return prefix_sum_.size() - 1;
             }
 
             inline size_t partition_size(size_t partition_idx) const {
@@ -114,11 +114,7 @@ namespace particle_collision {
             }
 
             inline size_t partition_offset(size_t partition_idx) const {
-                if (partition_idx == 0) {
-                    return 0;
-                } else if (partition_idx < num_partitions()) {
-                    return prefix_sum_[partition_idx];
-                } else return prefix_sum_[num_partitions() - 1] + partition_size(num_partitions() - 1);
+                return prefix_sum_[std::min(partition_idx, num_partitions())];
             }
 
             inline std::pair<Position, Data>& operator()(size_t partition_idx, size_t element_idx) const {

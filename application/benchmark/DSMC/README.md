@@ -1,44 +1,27 @@
-# DSMC：N₂ 超声速射流撞击平板 / DSMC: supersonic N₂ jet impinging on a flat plate
+# DSMC 氮气超声速平板绕流 / DSMC of supersonic nitrogen flow past a flat plate
 
-稀薄气体 DSMC 算例：N₂ 超声速射流撞击平板，VHS 碰撞模型 + 内能交换。
+`main.cpp` 使用 VHS 碰撞模型和转动内能交换计算稀薄氮气绕平板的流动。工况对应 Palharini 等人的 truncated flat plates 算例。[原始论文](https://doi.org/10.1016/j.compfluid.2015.07.021)
 
-A rarefied-gas DSMC case: a supersonic N₂ jet impinging on a flat plate, with a VHS collision model and internal energy exchange.
+`main.cpp` simulates rarefied nitrogen flow past a flat plate using variable hard sphere (VHS) collisions and rotational energy exchange. The conditions follow the truncated flat plate case of Palharini et al. [Original paper](https://doi.org/10.1016/j.compfluid.2015.07.021)
 
-## 对比文献 / Reference
+## 构建与运行 / Build and run
 
-> R. C. Palharini, C. White, T. J. Scanlon, R. E. Brown, M. K. Borg, and J. M. Reese,
-> "Benchmark numerical simulations of rarefied non-reacting gas flows using an open-source DSMC code",
-> *Computers & Fluids* **120**, 140–157 (2015).
-> DOI: [10.1016/j.compfluid.2015.07.021](https://doi.org/10.1016/j.compfluid.2015.07.021)
+在本目录使用 GNU Make、AdaptiveCpp、Clang 16 和 Eigen3。可用 `ACPP` 和 `CPU_CXX` 指定编译器路径。
 
-## 对应关系 / Correspondence
+Use GNU Make, AdaptiveCpp, Clang 16 and Eigen3 from this directory. Set `ACPP` and `CPU_CXX` to override the compiler paths.
 
-本算例对应上述文献中的 **truncated flat plates** 算例。
-
-This case corresponds to the **truncated flat plates** case in the paper above.
-
-使用前请对照原文核对工况参数的一致性，并按需引用上述文献。
-
-Before use, check the flow conditions against the original paper and cite it where appropriate.
-
-## 运行 / Run
-
-```bash
-make dsmc
+```sh
+make                         # 构建默认 CPU 主程序 / build the default CPU driver
+OMP_NUM_THREADS=2 make smoke # 同一主程序，运行 100 步 / run 100 steps with the same driver
+make run                     # 默认 50000 步 / run the default 50000 steps
 ```
 
-> 构建环境需已按根目录文档配置好。
-> The build environment is supposed to be already configured per the repository-root docs.
+默认入口种子 20261021，宏粒子权重 10¹⁰，时间步长 2×10⁻⁸ s。诊断写入 `output/local-moments.csv`，每五步记录七个测区。重复运行会覆盖同名文件。设置 `N2_DIAGNOSTICS=0` 可关闭诊断。配置好 CUDA 后运行 `make run-gpu`，开启诊断时另写 `gpu-memory.csv`。
 
-构建并自动运行；输出为运行目录与 `output/` 下的 `.plt` 序列。
-通常需要运行几十分钟。
+The defaults are inlet seed 20261021, macroparticle weight 10¹⁰ and time step 2×10⁻⁸ s. Diagnostics record seven sampling regions every five steps in `output/local-moments.csv`. Rerunning overwrites files with the same name. Set `N2_DIAGNOSTICS=0` to disable diagnostics. With CUDA configured, use `make run-gpu`. GPU runs also write `gpu-memory.csv` when diagnostics are enabled.
 
-Builds and runs automatically. Output is a `.plt` series in the working directory and `output/` (flow fields and `vx_dist_*.plt` velocity distributions).
-This case usually takes several tens of minutes to run.
+## 参考结果 / Reference results
 
-## 结果 / Main results
+[历史对照工况](reference_results/reference-case.json) · [七测区数密度](reference_results/steady-density.csv) · [平动与转动温度](reference_results/steady-temperature.csv)。两张表的 SPARTA 列来自权重 5×10¹⁰、三个种子、1–2 ms 时间窗的历史对照。
 
-平板绕流的流场参数分布的时间演化。可以获得与参考文献基本一致的密度分布。
-
-Flow-field distributions around the plate and the time evolution of the vx velocity distribution.
-A density distribution obtained is basically consistent with the reference literature.
+[Historical reference case](reference_results/reference-case.json) · [Number densities in the seven sampling regions](reference_results/steady-density.csv) · [Translational and rotational temperatures](reference_results/steady-temperature.csv). The SPARTA columns in both tables come from the historical comparison with macroparticle weight 5×10¹⁰, three seeds and a 1–2 ms sampling window.

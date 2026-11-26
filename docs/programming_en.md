@@ -359,10 +359,11 @@ Users need to understand three concepts:
 Simplified flow:
 
 ```text
-prepare species contexts
-execute_mcc_model<Model>(ctx, dt)
-execute_all_clean_buffers<SpeciesTuple>(ctx)
+bind species contexts; for DPMCC, compose them with the channel contexts
+execute_collision_model<Model>(ctx, dt)
 ```
+
+The complete step reserves product capacity, processes MCC and any deferred pairs, then inserts all products. Callers using the lower-level incident pass must manage capacity, deferred pairing and product insertion themselves.
 
 Custom collision cross-sections, channel selection, and pairing algorithms are typically too lengthy for a main tutorial; see the [examples overview](examples_en.md) and the concrete applications under `application/` for complete usage.
 
